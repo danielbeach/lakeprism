@@ -262,6 +262,7 @@ pub fn decode_audio_segments(
     let time_base = stream.time_base();
     let context = codec::context::Context::from_parameters(stream.parameters())?;
     let mut decoder = context.decoder().audio()?;
+    decoder.set_parameters(stream.parameters())?;
     let input_layout = decoder.channel_layout();
     let input_rate = decoder.rate();
     if input_rate == 0 || input_layout.channels() == 0 {
