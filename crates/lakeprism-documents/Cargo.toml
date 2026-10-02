@@ -1,0 +1,11 @@
+[package]
+name = "lakeprism-documents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lopdf.workspace = true
+quick-xml.workspace = true
+thiserror.workspace = true
+zip.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "lakeprism-execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arrow.workspace = true
+async-trait.workspace = true
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-storage = { path = "../lakeprism-storage" }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+serde_json.workspace = true

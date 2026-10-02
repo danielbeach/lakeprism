@@ -1,0 +1,31 @@
+name: Opt-in Databricks cloud acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      table:
+        description: Optional Unity three-part table name for metadata acceptance
+        required: false
+        type: string
+      volume_path:
+        description: Optional governed Unity Volume path to validate
+        required: false
+        type: string
+
+jobs:
+  metadata-contract:
+    runs-on: ubuntu-24.04
+    environment: databricks-acceptance
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify explicit, metadata-only cloud contract
+        env:
+          LAKEPRISM_LIVE_CLOUD: "1"
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_TABLE: ${{ inputs.table }}
+          DATABRICKS_VOLUME_PATH: ${{ inputs.volume_path }}
+        run: bash scripts/live-cloud-acceptance.sh

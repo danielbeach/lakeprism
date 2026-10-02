@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  native-runtime:
+    # The host, Rust compiler target, FFmpeg development libraries, and Python
+    # extension interpreter are all x86_64 Linux in this job. Do not replace
+    # this with cross-compilation: native FFmpeg/PyO3 tests must link and run.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libavresample-dev pkg-config
+      - run: cargo test -p lakeprism-media --features native-media
+      - run: cargo test -p lakeprism-datafusion --features native-media
+      - run: cargo test -p lakeprism-flight --features native-media
+      - run: cargo test -p lakeprism-cli
+      - run: cargo clippy -p lakeprism-python --features native-media,flight,delta-rs,unity -- -D warnings
+      - run: pip install maturin==1.10.2 pytest
+      - run: maturin develop --manifest-path crates/lakeprism-python/Cargo.toml --features native-media,flight,delta-rs,unity
+      - run: LAKEPRISM_NATIVE_MEDIA=1 pytest crates/lakeprism-python/python/lakeprism/test_bindings.py

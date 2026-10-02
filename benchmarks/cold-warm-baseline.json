@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "benchmark": "lakeprism-index/cold_warm",
+  "environment": "unmeasured",
+  "cold_nanos": null,
+  "warm_nanos": null,
+  "max_regression_ratio": 1.2,
+  "notes": "This repository intentionally ships no timing baseline. Capture and review one only on a controlled, architecture-matched host."
+}

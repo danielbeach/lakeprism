@@ -1,0 +1,48 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python environments, bytecode, and build artifacts
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+/build/
+/dist/
+**/dist/
+**/build/
+
+# Maturin and PyPI artifacts
+*.whl
+*.tar.gz
+
+# LakePrism local runtime state
+/.lakeprism/
+*.lakeprism
+
+# Credentials and environment configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Coverage and benchmark output
+coverage/
+htmlcov/
+*.profraw
+*.profdata
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

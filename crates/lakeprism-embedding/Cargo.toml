@@ -1,0 +1,30 @@
+[package]
+name = "lakeprism-embedding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional governed subprocess batch embedding adapter for LakePrism"
+
+[features]
+default = []
+# Builds a protocol-only fixture executable used solely by this crate's tests.
+fixture-provider = []
+
+[dependencies]
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-index = { path = "../lakeprism-index" }
+lakeprism-storage = { path = "../lakeprism-storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[[bin]]
+name = "lakeprism-embedding-fixture"
+path = "src/bin/fixture.rs"
+required-features = ["fixture-provider"]
+
+[[bench]]
+name = "batch_throughput"
+harness = false
+required-features = ["fixture-provider"]

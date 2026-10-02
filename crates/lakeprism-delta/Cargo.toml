@@ -1,0 +1,23 @@
+[package]
+name = "lakeprism-delta"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+delta-rs = ["dep:deltalake", "lakeprism-storage/s3"]
+
+[dependencies]
+arrow.workspace = true
+datafusion.workspace = true
+deltalake = { workspace = true, optional = true }
+lakeprism-datafusion = { path = "../lakeprism-datafusion" }
+lakeprism-storage = { path = "../lakeprism-storage", default-features = false }
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+uuid.workspace = true

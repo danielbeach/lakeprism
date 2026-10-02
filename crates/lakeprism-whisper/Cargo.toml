@@ -1,0 +1,26 @@
+[package]
+name = "lakeprism-whisper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional subprocess-backed local transcription adapter for LakePrism"
+
+[features]
+default = []
+# Builds a protocol-only fixture executable used by this crate's tests. It is
+# not enabled by applications or base wheels.
+fixture-provider = []
+
+[dependencies]
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-index = { path = "../lakeprism-index" }
+lakeprism-storage = { path = "../lakeprism-storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[[bin]]
+name = "lakeprism-whisper-fixture"
+path = "src/bin/fixture.rs"
+required-features = ["fixture-provider"]

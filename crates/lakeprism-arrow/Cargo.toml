@@ -1,0 +1,9 @@
+[package]
+name = "lakeprism-arrow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+arrow.workspace = true
+lakeprism-core = { path = "../lakeprism-core" }

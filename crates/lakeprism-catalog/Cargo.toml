@@ -1,0 +1,18 @@
+[package]
+name = "lakeprism-catalog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+datafusion.workspace = true
+fs2.workspace = true
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-datafusion = { path = "../lakeprism-datafusion" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

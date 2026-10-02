@@ -1,0 +1,46 @@
+[package]
+name = "lakeprism-unity"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+unity = [
+    "dep:async-trait",
+    "dep:lakeprism-datafusion",
+    "dep:reqwest",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:uuid",
+]
+iceberg-rest = ["unity", "dep:lakeprism-iceberg"]
+delta-rs = [
+    "unity",
+    "dep:lakeprism-delta",
+    "dep:lakeprism-storage",
+    "dep:arrow",
+    "lakeprism-delta/delta-rs",
+    "lakeprism-storage/s3",
+]
+
+[dependencies]
+arrow = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-datafusion = { path = "../lakeprism-datafusion", optional = true }
+lakeprism-delta = { path = "../lakeprism-delta", optional = true }
+lakeprism-iceberg = { path = "../lakeprism-iceberg", optional = true, features = ["iceberg-rest"] }
+lakeprism-storage = { path = "../lakeprism-storage", optional = true, default-features = false }
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+url.workspace = true
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+arrow.workspace = true
+parquet.workspace = true
+tokio.workspace = true
+wiremock = "0.6.5"

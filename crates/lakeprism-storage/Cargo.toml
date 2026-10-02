@@ -1,0 +1,23 @@
+[package]
+name = "lakeprism-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+s3 = ["dep:object_store"]
+
+[dependencies]
+async-trait.workspace = true
+lakeprism-core = { path = "../lakeprism-core" }
+object_store = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock = "0.6.5"

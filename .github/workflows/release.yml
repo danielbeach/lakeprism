@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: CLI and GitHub artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install target-matched native dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libavresample-dev pkg-config
+      - name: Verify locked source
+        run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+      - name: Verify native acceptance paths
+        run: |
+          cargo test --locked -p lakeprism-media -p lakeprism-datafusion -p lakeprism-flight --features native-media
+          cargo clippy --locked -p lakeprism-python --features native-media,flight -- -D warnings
+      - name: Build CLI artifact
+        run: |
+          cargo build --locked --release -p lakeprism-cli
+      - name: Create source and checksum manifest
+        run: |
+          mkdir -p dist/release
+          cp target/release/lakeprism dist/release/
+          git archive --format=tar.gz --prefix=lakeprism-${GITHUB_REF_NAME:-local}/ HEAD > dist/release/lakeprism-source.tar.gz
+          find dist/release -type f -print0 | sort -z | xargs -0 shasum -a 256 > dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lakeprism-${{ github.ref_name }}-artifacts
+          path: dist/
+          if-no-files-found: error
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/release/lakeprism
+            dist/release/lakeprism-source.tar.gz
+            dist/SHA256SUMS

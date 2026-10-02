@@ -1,0 +1,17 @@
+[package]
+name = "lakeprism-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lakeprism-core = { path = "../lakeprism-core" }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[[bench]]
+name = "cold_warm"
+harness = false

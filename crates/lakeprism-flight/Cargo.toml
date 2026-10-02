@@ -1,0 +1,24 @@
+[package]
+name = "lakeprism-flight"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+native-media = ["lakeprism-datafusion/native-media"]
+
+[dependencies]
+arrow.workspace = true
+arrow-flight.workspace = true
+datafusion.workspace = true
+futures.workspace = true
+lakeprism-datafusion = { path = "../lakeprism-datafusion" }
+prost.workspace = true
+thiserror.workspace = true
+tonic.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+lakeprism-core = { path = "../lakeprism-core" }
+tokio.workspace = true

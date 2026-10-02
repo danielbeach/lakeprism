@@ -1,0 +1,25 @@
+[package]
+name = "lakeprism-derived"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+delta-rs = ["dep:lakeprism-delta"]
+
+[dependencies]
+arrow.workspace = true
+datafusion.workspace = true
+lakeprism-arrow = { path = "../lakeprism-arrow" }
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-datafusion = { path = "../lakeprism-datafusion" }
+lakeprism-delta = { path = "../lakeprism-delta", optional = true, features = ["delta-rs"] }
+lakeprism-index = { path = "../lakeprism-index" }
+parquet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

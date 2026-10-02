@@ -1,0 +1,145 @@
+name: PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the assembled artifacts to PyPI
+        required: true
+        default: false
+        type: boolean
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: manylinux-x86_64
+            runner: ubuntu-24.04
+            platform: manylinux-x86_64
+            manylinux: "2_28"
+          - name: macos-x86_64
+            runner: macos-13
+            platform: macos-x86_64
+            manylinux: "off"
+          - name: macos-aarch64
+            runner: macos-14
+            platform: macos-aarch64
+            manylinux: "off"
+          - name: windows-x86_64
+            runner: windows-2022
+            platform: windows-x86_64
+            manylinux: "off"
+            cross: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - uses: astral-sh/setup-uv@v6
+      - name: Build ABI3 wheel
+        shell: bash
+        run: |
+          args=(--platform "${{ matrix.platform }}" --out dist/python)
+          if [[ "${{ matrix.manylinux }}" != "off" ]]; then
+            args+=(--manylinux "${{ matrix.manylinux }}")
+          fi
+          bash scripts/build-python-wheels.sh "${args[@]}"
+      - name: Smoke-test wheel in a clean virtual environment
+        shell: bash
+        run: |
+          uv venv --clear .wheel-smoke-venv
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            python_bin=".wheel-smoke-venv/Scripts/python.exe"
+          else
+            python_bin=".wheel-smoke-venv/bin/python"
+          fi
+          uv pip install --python "$python_bin" --no-deps dist/python/*.whl
+          "$python_bin" -c 'import lakeprism; print(lakeprism.__file__)'
+          "$python_bin" - <<'PY'
+          import glob
+          import tarfile
+          import zipfile
+
+          wheel = glob.glob("dist/python/*.whl")
+          assert len(wheel) == 1, wheel
+          with zipfile.ZipFile(wheel[0]) as archive:
+              names = archive.namelist()
+          assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
+          PY
+          rm -rf .wheel-smoke-venv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/python/*.whl
+          if-no-files-found: error
+
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - uses: astral-sh/setup-uv@v6
+      - name: Build source distribution
+        run: |
+          mkdir -p dist/python
+          uv tool run --from 'maturin==1.10.2' maturin sdist \
+            --manifest-path crates/lakeprism-python/Cargo.toml \
+            --out dist/python
+      - name: Smoke-test source distribution in a clean virtual environment
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob
+          import tarfile
+
+          sdist = glob.glob("dist/python/*.tar.gz")
+          assert len(sdist) == 1, sdist
+          with tarfile.open(sdist[0]) as archive:
+              names = archive.getnames()
+          assert any(name.endswith("/LICENSE") for name in names), names
+          PY
+          uv venv --clear .sdist-smoke-venv
+          uv pip install --python .sdist-smoke-venv/bin/python --no-deps dist/python/*.tar.gz
+          .sdist-smoke-venv/bin/python -c 'import lakeprism; print(lakeprism.__file__)'
+          rm -rf .sdist-smoke-venv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-distribution
+          path: dist/python/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' || inputs.publish
+    needs: [wheel, source]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/lakeprism
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-distribution
+          path: dist
+      - name: Validate distribution metadata
+        run: uv tool run --from 'twine==6.1.0' twine check dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1

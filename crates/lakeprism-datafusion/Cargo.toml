@@ -1,0 +1,32 @@
+[package]
+name = "lakeprism-datafusion"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+native-media = ["lakeprism-media/native-media"]
+remote-media-s3 = ["native-media", "lakeprism-storage/s3"]
+
+[dependencies]
+async-trait.workspace = true
+arrow.workspace = true
+datafusion.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+lakeprism-arrow = { path = "../lakeprism-arrow" }
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-documents = { path = "../lakeprism-documents" }
+lakeprism-index = { path = "../lakeprism-index" }
+lakeprism-media = { path = "../lakeprism-media" }
+lakeprism-storage = { path = "../lakeprism-storage" }
+url.workspace = true
+
+[dev-dependencies]
+parquet.workspace = true
+tokio.workspace = true
+zip.workspace = true

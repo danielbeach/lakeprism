@@ -1,0 +1,42 @@
+[package]
+name = "lakeprism-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "_lakeprism"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+native-media = ["lakeprism-datafusion/native-media"]
+delta-rs = ["lakeprism-delta/delta-rs", "lakeprism-unity?/delta-rs"]
+unity = ["dep:lakeprism-unity", "lakeprism-unity/unity"]
+flight = ["dep:arrow-flight", "dep:lakeprism-flight", "dep:tokio-stream", "dep:tonic"]
+embedding-subprocess = ["dep:lakeprism-embedding"]
+
+[dependencies]
+async-trait.workspace = true
+arrow.workspace = true
+arrow-flight = { workspace = true, optional = true }
+datafusion.workspace = true
+futures.workspace = true
+lakeprism-catalog = { path = "../lakeprism-catalog" }
+lakeprism-core = { path = "../lakeprism-core" }
+lakeprism-datafusion = { path = "../lakeprism-datafusion" }
+lakeprism-delta = { path = "../lakeprism-delta", optional = true }
+lakeprism-embedding = { path = "../lakeprism-embedding", optional = true }
+lakeprism-derived = { path = "../lakeprism-derived" }
+lakeprism-flight = { path = "../lakeprism-flight", optional = true }
+lakeprism-index = { path = "../lakeprism-index" }
+lakeprism-media = { path = "../lakeprism-media" }
+lakeprism-storage = { path = "../lakeprism-storage" }
+lakeprism-unity = { path = "../lakeprism-unity", optional = true }
+pyo3.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+url.workspace = true
+uuid.workspace = true
