@@ -256,7 +256,7 @@ pub fn decode_audio_segments(
     validate_input_profile(&input, NativeMediaProfile::default())?;
     let stream = input
         .streams()
-        .best(media::Type::Audio)
+        .find(|stream| stream.parameters().medium() == media::Type::Audio)
         .ok_or(MediaError::MissingAudioStream)?;
     let stream_index = stream.index();
     let time_base = stream.time_base();
@@ -624,6 +624,7 @@ mod tests {
             .unwrap();
         assert!(status.success());
 
+        assert_eq!(probe_media(&output_path).unwrap().audio_stream_count, 1);
         let segments = decode_audio_segments(&output_path, 0, 120, 40, 3).unwrap();
 
         assert_eq!(segments.len(), 3);
