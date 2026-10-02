@@ -15,6 +15,7 @@ delta-rs = ["lakeprism-delta/delta-rs", "lakeprism-unity?/delta-rs"]
 unity = ["dep:lakeprism-unity", "lakeprism-unity/unity"]
 flight = ["dep:arrow-flight", "dep:lakeprism-flight", "dep:tokio-stream", "dep:tonic"]
 embedding-subprocess = ["dep:lakeprism-embedding"]
+whisper-subprocess = ["dep:lakeprism-whisper"]
 
 [dependencies]
 async-trait.workspace = true
@@ -33,6 +34,7 @@ lakeprism-index = { path = "../lakeprism-index" }
 lakeprism-media = { path = "../lakeprism-media" }
 lakeprism-storage = { path = "../lakeprism-storage" }
 lakeprism-unity = { path = "../lakeprism-unity", optional = true }
+lakeprism-whisper = { path = "../lakeprism-whisper", optional = true }
 pyo3.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

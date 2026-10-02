@@ -37,8 +37,8 @@ use lakeprism_index::{
     EmbeddingRecord, EmbeddingRequest, IndexError, MediaSearchExplanation, MediaTranscriptSearch,
     MediaTranscriptSearchRequest, OcrProvider, OcrRequest, ProgressiveScheduleLimits, RankedResult,
     RankingOptions, TranscriptIndex, TranscriptSegment, TranscriptionProvider,
-    UnavailableEmbeddingProvider, UnavailableOcrProvider, UnavailableTranscriptionProvider,
-    run_ocr,
+    TranscriptionRequest, UnavailableEmbeddingProvider, UnavailableOcrProvider,
+    UnavailableTranscriptionProvider, run_ocr,
 };
 #[cfg(feature = "native-media")]
 use lakeprism_media::{decode_audio_segments, decode_video_frames};
@@ -122,6 +122,7 @@ pub struct MediaSession {
     embedding_lineage: Arc<Mutex<Option<lakeprism_core::FeatureLineage>>>,
     cross_modal_index: Arc<Mutex<CrossModalIndex>>,
     embedding_provider: Arc<dyn EmbeddingProvider>,
+    transcription_provider: Arc<dyn TranscriptionProvider>,
     queries: Arc<Mutex<HashMap<String, QueryRecord>>>,
 }
 
@@ -365,11 +366,23 @@ impl MediaSession {
     pub fn with_transcription_provider(
         transcription_provider: Arc<dyn TranscriptionProvider>,
     ) -> Self {
-        Self::with_execution_governor_and_providers(
+        Self::with_transcription_provider_and_governor(
             Arc::new(
                 ExecutionGovernor::new(ExecutionGovernorConfig::default())
                     .expect("default execution governor configuration is valid"),
             ),
+            transcription_provider,
+        )
+    }
+
+    /// Installs an application-owned bounded transcription provider with the
+    /// same governor that constrains provider work and query execution.
+    pub fn with_transcription_provider_and_governor(
+        execution_governor: Arc<ExecutionGovernor>,
+        transcription_provider: Arc<dyn TranscriptionProvider>,
+    ) -> Self {
+        Self::with_execution_governor_and_providers(
+            execution_governor,
             Arc::new(UnavailableEmbeddingProvider),
             transcription_provider,
             Arc::new(UnavailableOcrProvider),
@@ -398,9 +411,9 @@ impl MediaSession {
     ) -> Self {
         let context = SessionContext::new();
         let transcript_index = Arc::new(Mutex::new(TranscriptIndex::default()));
-        let media_transcript_search = Arc::new(Mutex::new(MediaTranscriptSearch::new(
-            transcription_provider,
-        )));
+        let media_transcript_search = Arc::new(Mutex::new(MediaTranscriptSearch::new(Arc::clone(
+            &transcription_provider,
+        ))));
         let embedding_index = Arc::new(Mutex::new(EmbeddingIndex::default()));
         let embedding_lineage = Arc::new(Mutex::new(None));
         let cross_modal_index = Arc::new(Mutex::new(CrossModalIndex::default()));
@@ -422,6 +435,7 @@ impl MediaSession {
             embedding_lineage,
             cross_modal_index,
             embedding_provider,
+            transcription_provider,
             queries: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -719,6 +733,27 @@ impl MediaSession {
             index.insert(segment)?;
         }
         Ok(())
+    }
+
+    /// Transcribes one bounded local media request through the configured
+    /// provider, then registers the validated rows in the session transcript
+    /// index. The default session returns ProviderUnavailable.
+    pub fn transcribe_media(
+        &self,
+        request: TranscriptionRequest,
+    ) -> std::result::Result<Vec<TranscriptSegment>, IndexError> {
+        let _query_permit = self
+            .execution_governor
+            .try_acquire_query()
+            .ok_or(IndexError::ResourceExhausted { resource: "query" })?;
+        let rows = self.transcription_provider.transcribe(&request)?;
+        for row in &rows {
+            if !row.lineage.is_compatible_with(&request.lineage) {
+                return Err(IndexError::IncompatibleProviderResult);
+            }
+        }
+        self.register_transcript_segments(rows.clone())?;
+        Ok(rows)
     }
 
     /// Registers rows loaded from an immutable persisted transcript index.

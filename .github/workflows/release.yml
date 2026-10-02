@@ -29,7 +29,7 @@ jobs:
       - name: Verify native acceptance paths
         run: |
           cargo test --locked -p lakeprism-media -p lakeprism-datafusion -p lakeprism-flight --features native-media
-          cargo clippy --locked -p lakeprism-python --features native-media,flight -- -D warnings
+          cargo clippy --locked -p lakeprism-python --features native-media,flight,whisper-subprocess -- -D warnings
       - name: Build CLI artifact
         run: |
           cargo build --locked --release -p lakeprism-cli

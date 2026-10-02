@@ -5,8 +5,12 @@ use lakeprism_datafusion::MediaSession;
 use lakeprism_derived::{DerivedIndexRow, refresh_embedding_index_parquet};
 #[cfg(feature = "embedding-subprocess")]
 use lakeprism_embedding::{EmbeddingSubprocessConfig, EmbeddingSubprocessProvider};
-use lakeprism_index::{DeterministicMockEmbeddingProvider, EmbeddingRecord, TranscriptSegment};
+use lakeprism_index::{
+    DeterministicMockEmbeddingProvider, EmbeddingRecord, TranscriptSegment, TranscriptionRequest,
+};
 use lakeprism_media::plan_frames;
+#[cfg(feature = "whisper-subprocess")]
+use lakeprism_whisper::{WhisperSubprocessConfig, WhisperSubprocessProvider};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict, PyModule};
@@ -51,6 +55,22 @@ struct PythonDerivedIndexRow {
 #[derive(Clone)]
 struct PythonEmbeddingSubprocessConfig {
     inner: EmbeddingSubprocessConfig,
+}
+
+#[cfg(feature = "whisper-subprocess")]
+#[pyclass(name = "WhisperSubprocessConfig", skip_from_py_object)]
+#[derive(Clone)]
+struct PythonWhisperSubprocessConfig {
+    inner: WhisperSubprocessConfig,
+}
+
+#[cfg(feature = "whisper-subprocess")]
+#[derive(Clone)]
+struct TranscriptionLineageTemplate {
+    operator_version: String,
+    model: String,
+    model_version: String,
+    parameters: BTreeMap<String, String>,
 }
 
 #[pyclass(name = "LocalCatalog")]
@@ -197,6 +217,50 @@ impl PythonEmbeddingSubprocessConfig {
             model_artifact: model_artifact.into(),
             staging_directory: staging_directory.into(),
             max_batch_items,
+            max_input_bytes,
+            max_output_bytes,
+            timeout: Duration::from_secs_f64(timeout_seconds),
+            operator_version,
+            model,
+            model_version,
+            parameters: parameters.unwrap_or_default(),
+        };
+        inner
+            .validate()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+}
+
+#[cfg(feature = "whisper-subprocess")]
+#[pymethods]
+impl PythonWhisperSubprocessConfig {
+    #[new]
+    #[pyo3(signature = (executable, arguments, model_artifact, staging_directory, max_input_bytes=1024*1024*1024, max_output_bytes=16*1024*1024, timeout_seconds=600.0, operator_version="whisper-subprocess-v1".to_string(), model="local".to_string(), model_version="unknown".to_string(), parameters=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        executable: String,
+        arguments: Vec<String>,
+        model_artifact: String,
+        staging_directory: String,
+        max_input_bytes: u64,
+        max_output_bytes: u64,
+        timeout_seconds: f64,
+        operator_version: String,
+        model: String,
+        model_version: String,
+        parameters: Option<BTreeMap<String, String>>,
+    ) -> PyResult<Self> {
+        if !timeout_seconds.is_finite() || timeout_seconds <= 0.0 {
+            return Err(PyValueError::new_err(
+                "timeout_seconds must be finite and greater than zero",
+            ));
+        }
+        let inner = WhisperSubprocessConfig {
+            executable: executable.into(),
+            arguments,
+            model_artifact: model_artifact.into(),
+            staging_directory: staging_directory.into(),
             max_input_bytes,
             max_output_bytes,
             timeout: Duration::from_secs_f64(timeout_seconds),
@@ -657,6 +721,56 @@ impl PythonTranscriptSegment {
             },
         })
     }
+
+    #[getter]
+    fn media_id(&self) -> &str {
+        &self.inner.media_id
+    }
+
+    #[getter]
+    fn start_millis(&self) -> u64 {
+        self.inner.start_millis
+    }
+
+    #[getter]
+    fn end_millis(&self) -> u64 {
+        self.inner.end_millis
+    }
+
+    #[getter]
+    fn text(&self) -> &str {
+        &self.inner.text
+    }
+
+    #[getter]
+    fn confidence_millis(&self) -> Option<u16> {
+        self.inner.confidence_millis
+    }
+
+    #[getter]
+    fn source_uri(&self) -> &str {
+        &self.inner.lineage.source.media_uri
+    }
+
+    #[getter]
+    fn source_version(&self) -> &str {
+        &self.inner.lineage.source.source_version
+    }
+
+    #[getter]
+    fn operator_version(&self) -> &str {
+        &self.inner.lineage.operator_version
+    }
+
+    #[getter]
+    fn model(&self) -> Option<&str> {
+        self.inner.lineage.model.as_deref()
+    }
+
+    #[getter]
+    fn model_version(&self) -> Option<&str> {
+        self.inner.lineage.model_version.as_deref()
+    }
 }
 
 #[pymethods]
@@ -703,6 +817,8 @@ impl PythonMediaRef {
 struct PythonMediaSession {
     inner: Arc<MediaSession>,
     runtime: Arc<Runtime>,
+    #[cfg(feature = "whisper-subprocess")]
+    transcription_lineage: Option<TranscriptionLineageTemplate>,
 }
 
 #[pymethods]
@@ -723,6 +839,8 @@ impl PythonMediaSession {
         Ok(Self {
             inner,
             runtime: Arc::new(runtime),
+            #[cfg(feature = "whisper-subprocess")]
+            transcription_lineage: None,
         })
     }
 
@@ -751,6 +869,42 @@ impl PythonMediaSession {
                 Arc::new(provider),
             )),
             runtime: Arc::new(runtime),
+            #[cfg(feature = "whisper-subprocess")]
+            transcription_lineage: None,
+        })
+    }
+
+    /// Construct a session with an explicit locally installed Whisper-compatible
+    /// adapter. The adapter receives staged files through direct argv only; no
+    /// model, command, or remote credential is bundled by LakePrism.
+    #[cfg(feature = "whisper-subprocess")]
+    #[staticmethod]
+    fn with_transcription_subprocess(
+        config: PyRef<'_, PythonWhisperSubprocessConfig>,
+    ) -> PyResult<Self> {
+        let runtime =
+            Runtime::new().map_err(|_| PyRuntimeError::new_err("could not start runtime"))?;
+        let governor = Arc::new(
+            lakeprism_storage::ExecutionGovernor::new(
+                lakeprism_storage::ExecutionGovernorConfig::default(),
+            )
+            .map_err(|_| PyRuntimeError::new_err("could not configure execution governor"))?,
+        );
+        let provider = WhisperSubprocessProvider::new(config.inner.clone(), Arc::clone(&governor))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let transcription_lineage = TranscriptionLineageTemplate {
+            operator_version: config.inner.operator_version.clone(),
+            model: config.inner.model.clone(),
+            model_version: config.inner.model_version.clone(),
+            parameters: config.inner.parameters.clone(),
+        };
+        Ok(Self {
+            inner: Arc::new(MediaSession::with_transcription_provider_and_governor(
+                governor,
+                Arc::new(provider),
+            )),
+            runtime: Arc::new(runtime),
+            transcription_lineage: Some(transcription_lineage),
         })
     }
 
@@ -947,6 +1101,71 @@ impl PythonMediaSession {
         self.inner
             .register_transcript_segments(segments)
             .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Transcribe a local audio or video file through this session's configured
+    /// Whisper-compatible provider and register the resulting transcript rows.
+    #[cfg(feature = "whisper-subprocess")]
+    #[pyo3(signature = (uri, media_type, source_version, start_millis = 0, end_millis = None, max_segments = 1024))]
+    #[allow(clippy::too_many_arguments)]
+    fn transcribe(
+        &self,
+        py: Python<'_>,
+        uri: String,
+        media_type: String,
+        source_version: String,
+        start_millis: u64,
+        end_millis: Option<u64>,
+        max_segments: usize,
+    ) -> PyResult<Vec<Py<PythonTranscriptSegment>>> {
+        validate_local_file_uri(&uri)?;
+        if !matches!(media_type.as_str(), "audio" | "video") {
+            return Err(PyValueError::new_err(
+                "media_type must be audio or video for transcription",
+            ));
+        }
+        if source_version.trim().is_empty() {
+            return Err(PyValueError::new_err("source_version must not be empty"));
+        }
+        if max_segments == 0 || max_segments > 1_024 {
+            return Err(PyValueError::new_err("max_segments must be in 1..=1024"));
+        }
+        let end_millis = end_millis.unwrap_or(u64::MAX);
+        if end_millis < start_millis {
+            return Err(PyValueError::new_err(
+                "end_millis must be greater than or equal to start_millis",
+            ));
+        }
+        let template = self.transcription_lineage.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "transcription is unavailable; construct the session with with_transcription_subprocess",
+            )
+        })?;
+        let request = TranscriptionRequest {
+            media: MediaRef::new(uri.clone(), media_type, StorageMode::External)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+            lineage: FeatureLineage {
+                source: SourceIdentity {
+                    media_uri: uri,
+                    source_version,
+                },
+                operator_version: template.operator_version.clone(),
+                model: Some(template.model.clone()),
+                model_version: Some(template.model_version.clone()),
+                parameters: template.parameters.clone(),
+            },
+            start_millis,
+            end_millis,
+            max_segments,
+        };
+        let rows = py.detach(|| {
+            self.inner
+                .transcribe_media(request)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+        })?;
+        rows.into_iter()
+            .map(|inner| Py::new(py, PythonTranscriptSegment { inner }))
+            .collect()
     }
 
     fn register_embedding_records(
@@ -1446,7 +1665,6 @@ fn validate_local_path_or_file_uri(value: &str) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg(feature = "delta-rs")]
 fn validate_local_file_uri(value: &str) -> PyResult<()> {
     let uri = url::Url::parse(value)
         .map_err(|_| PyValueError::new_err("a credential-free file:// URI is required"))?;
@@ -1731,6 +1949,8 @@ fn _lakeprism(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PythonDerivedIndexRow>()?;
     #[cfg(feature = "embedding-subprocess")]
     module.add_class::<PythonEmbeddingSubprocessConfig>()?;
+    #[cfg(feature = "whisper-subprocess")]
+    module.add_class::<PythonWhisperSubprocessConfig>()?;
     module.add_class::<PythonLocalCatalog>()?;
     #[cfg(feature = "unity")]
     module.add_class::<PythonUnityQueryContext>()?;

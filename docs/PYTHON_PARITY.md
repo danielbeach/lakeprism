@@ -10,6 +10,7 @@ used by Rust and the CLI. It does not reimplement query behavior in Python.
 | Local documents, video/audio plans, transcript/semantic/hybrid indexes | `document_*`, `video_frames`, `audio_segments`, search methods | Native FFmpeg only for actual decode |
 | Derived snapshots | `refresh_embedding_index`, `register_derived_snapshot` | Default |
 | Configured local batch embeddings | `EmbeddingSubprocessConfig`, `MediaSession.with_embedding_subprocess` | `embedding-subprocess`; no model or executable is bundled |
+| Configured local audio/video transcription | `WhisperSubprocessConfig`, `MediaSession.with_transcription_subprocess`, `MediaSession.transcribe` | `whisper-subprocess`; local `file://` only; no model or executable is bundled |
 | Delta read/write | `register_delta`, `write_delta_ipc` | `delta-rs`; local `file://` only |
 | Unity Catalog REST | `UnityCatalog`, `UnityQueryContext` | `unity`; OAuth callback is request-local |
 | Flight SQL | `FlightServer`, `FlightClient` | `flight`; client auth callback is request-local |
@@ -35,10 +36,11 @@ write safety requires scoped credentials plus an explicit remote-write guard.
   `iceberg::Table`; upstream does not provide a safe stable Python constructor
   for the provider/catalog/storage-client combination. Use Rust's Iceberg REST
   adapter, then pass the resulting credential-free session to Python.
-* Custom `MediaResolver`, OCR, transcription, image-understanding, S3 staging,
-  and distributed `Worker` implementations are Rust traits. Binding arbitrary
-  Python implementations would make cancellation, bounded I/O, and
-  credential-lifetime guarantees unenforceable.
+* Custom `MediaResolver`, OCR, image-understanding, S3 staging, and distributed
+  `Worker` implementations are Rust traits. Python exposes only the bounded
+  Whisper-compatible subprocess configuration; binding arbitrary provider
+  callbacks would make cancellation, bounded I/O, and credential-lifetime
+  guarantees unenforceable.
 * Flight SQL prepared statements support the native server's documented
   DataFusion subset; parameter binding and server-side callback authentication
   remain upstream/application-boundary concerns. Python can use request-local

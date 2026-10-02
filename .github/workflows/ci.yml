@@ -31,7 +31,7 @@ jobs:
       - run: cargo test -p lakeprism-datafusion --features native-media
       - run: cargo test -p lakeprism-flight --features native-media
       - run: cargo test -p lakeprism-cli
-      - run: cargo clippy -p lakeprism-python --features native-media,flight,delta-rs,unity -- -D warnings
+      - run: cargo clippy -p lakeprism-python --features native-media,flight,delta-rs,unity,whisper-subprocess -- -D warnings
       - run: pip install maturin==1.10.2 pytest
-      - run: maturin develop --manifest-path crates/lakeprism-python/Cargo.toml --features native-media,flight,delta-rs,unity
+      - run: maturin develop --manifest-path crates/lakeprism-python/Cargo.toml --features native-media,flight,delta-rs,unity,whisper-subprocess
       - run: LAKEPRISM_NATIVE_MEDIA=1 pytest crates/lakeprism-python/python/lakeprism/test_bindings.py

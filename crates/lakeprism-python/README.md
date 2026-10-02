@@ -23,8 +23,11 @@ manylinux x86_64, macOS (x86_64/aarch64), and Windows x86_64 release matrix.
 `MediaSession` exposes local media registration, SQL, lazy Arrow C-stream/IPC
 export, catalog metadata, `explain`, governed query lifecycle, local Parquet,
 document/media table functions, transcript/embedding indexes, and derived
-Parquet snapshots. `LocalCatalog` exposes its durable DDL and registration
-path. `FlightServer`/`FlightClient` are available with the `flight` feature.
+Parquet snapshots. `MediaSession.with_transcription_subprocess` plus
+`transcribe` provides local audio/video transcription through a validated,
+bounded Whisper-compatible adapter. `LocalCatalog` exposes its durable DDL and
+registration path. `FlightServer`/`FlightClient` are available with the
+`flight` feature.
 
 With `delta-rs`, `register_delta` reads credential-free local `file://` Delta
 tables and `write_delta_ipc` writes a PyArrow IPC stream with explicit write
@@ -48,21 +51,21 @@ Rust `iceberg::Table`; its REST construction and credentialed storage client
 are not safely constructible from this ABI-stable Python extension. Use the
 Rust Iceberg/REST adapter at an application boundary, then expose the
 credential-free `MediaSession` result to Python. Likewise, custom Rust
-`MediaResolver`, OCR/transcription/image providers, distributed worker
-implementations, S3 staging, and Flight server-side authentication remain
-application-boundary traits rather than Python object wrappers.
+`MediaResolver`, OCR/image providers, distributed worker implementations, S3
+staging, and Flight server-side authentication remain application-boundary
+traits rather than Python object wrappers.
 
 ### Optional local Whisper adapter
 
-Python wheels deliberately do **not** include a model runtime, model artifact,
-or `WhisperSubprocessProvider`. Configure the optional `lakeprism-whisper`
-Rust crate in the embedding application, then install its provider through
-`MediaSession::with_transcription_provider` before exposing a session to a
-notebook. The provider requires an absolute executable, explicit argument
-vector (not a shell command), validated local model artifact, and private
-staging directory. Notebook objects never accept model paths or commands.
-See the root README's “Optional local Whisper-compatible transcription” for
-the protocol and resource/cancellation limits.
+Python wheels include `WhisperSubprocessConfig` and
+`MediaSession.with_transcription_subprocess`, but deliberately do **not**
+include a model runtime, model artifact, or adapter executable. The config
+requires an absolute executable, explicit argument vector (not a shell
+command), validated local model artifact, and private staging directory.
+`session.transcribe` accepts only a local `file://` audio/video URI and an
+explicit source version; it returns and registers lineage-bearing
+`TranscriptSegment` rows. See the root README's “Transcribe local audio or
+video” section for the protocol and resource/cancellation limits.
 
 No LakePrism Python object accepts, serializes, logs, or persists OAuth client
 secrets, bearer tokens, or temporary cloud object-store credentials. See the

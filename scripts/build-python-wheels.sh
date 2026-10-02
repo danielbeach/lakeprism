@@ -16,7 +16,7 @@ Options:
   --manylinux POLICY    Maturin policy (for example 2_28 or off; default: off).
   --python PATH         Build interpreter (default: python3).
   --features FEATURES   Comma-separated Python crate features
-                        (default: flight,delta-rs,unity).
+                        (default: flight,delta-rs,unity,whisper-subprocess).
   --native-media        Add the native-media feature. Requires target-matched
                         FFmpeg development libraries; never cross-compile it.
   --out DIRECTORY       Wheel output directory (default: dist/python).
@@ -38,7 +38,7 @@ platform="native"
 target=""
 manylinux="off"
 python_bin="python3"
-features="flight,delta-rs,unity"
+features="flight,delta-rs,unity,whisper-subprocess"
 native_media=0
 out="dist/python"
 

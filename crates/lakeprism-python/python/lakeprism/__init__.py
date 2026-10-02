@@ -201,3 +201,10 @@ except ImportError:
     pass
 else:
     __all__.append("EmbeddingSubprocessConfig")
+
+try:
+    from ._lakeprism import WhisperSubprocessConfig
+except ImportError:
+    pass
+else:
+    __all__.append("WhisperSubprocessConfig")

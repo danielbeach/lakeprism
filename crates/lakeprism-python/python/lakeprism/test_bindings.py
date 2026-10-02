@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -273,3 +274,47 @@ def test_optional_callback_and_delta_surfaces_do_not_require_secret_objects():
         assert catalog is not None
     if hasattr(lakeprism, "write_delta_ipc"):
         assert callable(lakeprism.write_delta_ipc)
+
+
+def test_whisper_subprocess_transcribes_local_audio_or_video_with_lineage(tmp_path):
+    if not hasattr(lakeprism, "WhisperSubprocessConfig"):
+        pytest.skip("Whisper subprocess support was not compiled into this extension")
+
+    source = tmp_path / "sample.wav"
+    source.write_bytes(b"fixture audio")
+    model = tmp_path / "model.bin"
+    model.write_bytes(b"fixture model")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    adapter = tmp_path / "whisper_adapter.py"
+    adapter.write_text(
+        "import json\n"
+        "import pathlib\n"
+        "import sys\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps({"
+        "'segments': [{'start_millis': 0, 'end_millis': 500, "
+        "'text': 'fixture transcript', 'confidence_millis': 987}]}))\n"
+    )
+    config = lakeprism.WhisperSubprocessConfig(
+        sys.executable,
+        [str(adapter), "{input}", "{output}", "{model}"],
+        str(model),
+        str(staging),
+        operator_version="fixture-whisper-v1",
+        model="fixture",
+        model_version="1",
+    )
+    session = lakeprism.MediaSession.with_transcription_subprocess(config)
+
+    segments = session.transcribe(source.as_uri(), "audio", "fixture-source-v1")
+
+    assert len(segments) == 1
+    assert segments[0].media_id == source.as_uri()
+    assert segments[0].start_millis == 0
+    assert segments[0].end_millis == 500
+    assert segments[0].text == "fixture transcript"
+    assert segments[0].confidence_millis == 987
+    assert segments[0].source_version == "fixture-source-v1"
+    assert segments[0].operator_version == "fixture-whisper-v1"
+    assert segments[0].model == "fixture"
+    assert segments[0].model_version == "1"

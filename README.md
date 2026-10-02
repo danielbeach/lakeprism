@@ -133,6 +133,8 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 | `document_search(uri, query, limit)` | Bounded local document text search. | Query must be nonempty; limit is at most 1,024. |
 | `video_frames(uri, start, end, every, limit, include_rgb24=False)` | Lazy sampled video-frame rows. | `native-media` wheel with target-matched FFmpeg; max 32 frames. |
 | `audio_segments(uri, start, end, segment, limit, include_payload=False)` | Lazy normalized mono 16 kHz `f32le` audio chunks. | `native-media` wheel with target-matched FFmpeg; max 1,024 chunks. |
+| `MediaSession.with_transcription_subprocess(config)` | Creates a session with a bounded local Whisper-compatible adapter. | Requires `whisper-subprocess`; no model or executable is bundled. |
+| `session.transcribe(uri, media_type, source_version, ...)` | Transcribes a local audio/video file, returns typed timestamped rows, and registers them in the transcript index. | Local `file://` only; media type is `audio` or `video`; max 1,024 segments. |
 | `plan_video_frames(timestamps, ...)` | Plans bounded frame timestamps without decoding media. | Available in every wheel. |
 | `semantic_search(query, limit, candidate_limit=0)` | Lazy embedding search. | `candidate_limit=0` is exact; a positive value is explicitly approximate. |
 | `hybrid_search(query, limit, candidate_limit=0, semantic_weight=0.5)` | Lazy lexical plus embedding ranking. | Requires compatible registered indexes; weight is 0–1. |
@@ -167,6 +169,48 @@ Native decoding is intentionally separate from the portable Python wheel:
 bash scripts/build-python-wheels.sh \
   --platform native --native-media --out dist/python
 ```
+
+### Transcribe local audio or video
+
+The standard wheel includes the **provider contract**, not a model. Supply an
+application-installed adapter, an existing local model artifact, and an
+application-owned private staging directory. The adapter receives direct argv
+with staged `{input}`, `{output}`, and `{model}` paths; LakePrism never invokes
+a shell or stores the model path in transcript rows.
+
+```python
+import lakeprism
+
+whisper = lakeprism.WhisperSubprocessConfig(
+    executable="/opt/local/bin/whisper-adapter",
+    arguments=[
+        "--input", "{input}",
+        "--output", "{output}",
+        "--model", "{model}",
+    ],
+    model_artifact="/opt/models/whisper-large-v3.bin",
+    staging_directory="/var/lib/my-app/lakeprism-staging",
+    timeout_seconds=600,
+    operator_version="whisper-adapter-v1",
+    model="whisper-large-v3",
+    model_version="2026-10",
+)
+session = lakeprism.MediaSession.with_transcription_subprocess(whisper)
+
+segments = session.transcribe(
+    "file:///data/interview.mp4",
+    media_type="video",
+    source_version="sha256:...",
+)
+for segment in segments:
+    print(segment.start_millis, segment.end_millis, segment.text)
+```
+
+The adapter writes `{"segments": [...]}` JSON with `start_millis`, `end_millis`,
+`text`, and optional `confidence_millis`. LakePrism rejects invalid output,
+oversized inputs/results, lineage mismatches, non-local sources, unsafe
+configuration, timeouts, cancellation, and resource exhaustion without
+including paths, command arguments, tokens, or transcript text in errors.
 
 ## Delta, Unity, Flight, and credentials
 

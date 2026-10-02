@@ -3566,6 +3566,7 @@ dependencies = [
  "lakeprism-media",
  "lakeprism-storage",
  "lakeprism-unity",
+ "lakeprism-whisper",
  "pyo3",
  "serde_json",
  "tokio",
