@@ -23,7 +23,7 @@ jobs:
           architecture: "x64"
       - uses: astral-sh/setup-uv@v6
       - name: Install target-matched native dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libavresample-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev pkg-config
       - name: Verify locked source
         run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
       - name: Verify native acceptance paths

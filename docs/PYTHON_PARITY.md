@@ -55,9 +55,9 @@ Use `bash scripts/build-python-wheels.sh --platform native --out dist/python`
 from the repository root. The script invokes Maturin through `uv`, builds the
 PyO3 `abi3-py39` extension, and rejects cross-target builds. This is required
 because the extension and optional FFmpeg bindings must link and run on their
-actual target host. The root README documents the required native manylinux,
-musllinux, macOS x86_64/aarch64, and Windows x86_64 matrix. Standard portable
-wheels omit `native-media`; build that feature separately only with
+actual target host. The root README documents the supported native manylinux,
+macOS x86_64/aarch64, and Windows x86_64 matrix. Standard portable wheels omit
+`native-media`; build that feature separately only with
 target-matched FFmpeg development libraries.
 
 ## Equivalent workflows

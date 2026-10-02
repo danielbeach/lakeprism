@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.11"
           architecture: "x64"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libavresample-dev pkg-config
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev pkg-config
       - run: cargo test -p lakeprism-media --features native-media
       - run: cargo test -p lakeprism-datafusion --features native-media
       - run: cargo test -p lakeprism-flight --features native-media

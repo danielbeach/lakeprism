@@ -15,8 +15,8 @@ PyArrow, pandas, IPython, and tqdm only when called.
 The builder uses `uv tool run` to manage Maturin. It intentionally rejects
 cross-target builds: PyO3 and optional FFmpeg must link on the target-native
 host. LakePrism uses the PyO3 `abi3-py39` policy, producing one `cp39-abi3`
-wheel for CPython 3.9+. See the repository README for the manylinux,
-musllinux, macOS (x86_64/aarch64), and Windows x86_64 native CI matrix.
+wheel for CPython 3.9+. See the repository README for the supported
+manylinux x86_64, macOS (x86_64/aarch64), and Windows x86_64 release matrix.
 
 ## Capability parity and limits
 

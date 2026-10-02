@@ -26,9 +26,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lakeprism/lakeprism"
-Documentation = "https://github.com/lakeprism/lakeprism#python-api-completion"
-Source = "https://github.com/lakeprism/lakeprism"
+Homepage = "https://github.com/danielbeach/lakeprism"
+Documentation = "https://github.com/danielbeach/lakeprism#start-with-python"
+Source = "https://github.com/danielbeach/lakeprism"
 
 [project.optional-dependencies]
 notebook = [
