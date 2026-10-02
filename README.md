@@ -89,18 +89,68 @@ status = session.query_status(query_id)
 Cancellation is cooperative. Planning-time document work, codec calls, and
 remote scans cannot be interrupted in the middle of a blocking operation.
 
-## Local data workflows
+## Python functionality
 
-| Need | Python API | Notes |
+The Python module is a thin PyO3 facade over LakePrism's Rust execution
+engine. All SQL, planning, resource limits, catalog state, and lineage checks
+run in Rust; Python provides notebook-friendly construction and consumption.
+
+### Sessions, data registration, and SQL
+
+| API | What it does | Result / constraint |
 | --- | --- | --- |
-| Local Parquet | `session.register_parquet(name, path)` | Query it with normal SQL. |
-| Local Delta table | `session.register_delta(name, file_uri)` | Requires the `delta-rs` feature included in the standard wheel. |
-| Write local Delta | `lakeprism.write_delta_ipc(...)` | Accepts Arrow IPC with explicit create/append/overwrite modes. |
-| Durable catalog | `LocalCatalog(path)` | Register it in a `MediaSession` after executing catalog DDL. |
-| PDF/DOCX | `document_sections`, `document_tables`, `document_images`, `document_search` | Each method returns a lazy plan with bounded results. |
-| Video frames | `video_frames(...)` | Requires a wheel built with target-matched `native-media` and FFmpeg libraries. |
-| Audio chunks | `audio_segments(...)` | Same native-media requirement; payloads are opt-in. |
-| Search | `semantic_search`, `hybrid_search` | Requires compatible registered embedding/index records. |
+| `MediaSession()` | Creates an isolated local DataFusion/LakePrism session. | No network connection or credentials are retained. |
+| `MediaRef(uri, media_type, storage_mode="external")` | Creates a validated, credential-free media reference. | Register a list with `register_media_refs(table, refs)`. |
+| `register_parquet(table, path)` | Lazily registers a local path or `file://` Parquet relation. | Any other URI scheme is rejected. |
+| `register_derived_snapshot(table, path)` | Registers an immutable local Parquet feature/index snapshot. | It does not automatically trust it as a semantic index. |
+| `register_delta(table, file_uri, version=None)` | Lazily registers a local Delta table, optionally at a version. | Requires `delta-rs`; only credential-free `file://` URIs. |
+| `register_transcript_segments(segments)` | Adds transcript records to the session's search relation. | Each `TranscriptSegment` retains source/operator lineage. |
+| `register_embedding_records(records)` | Adds compatible `EmbeddingRecord` values for semantic/hybrid search. | Vector dimensions and lineage are validated. |
+| `sql(query)` / `execute(query)` | Runs SQL and returns Python dictionaries. | Values are display strings or `None`; column aliases must be unique. |
+| `plan(query)` | Creates a deferred SQL plan. | Call `collect`, `to_pyarrow`, `to_arrow_c_stream`, or `to_arrow_ipc` to run it. |
+| `explain(query)` | Creates a lazy `EXPLAIN` plan. | Consume it like every other `LazyPlan`. |
+| `catalog_tables()` | Returns registered catalog/schema/table/provider metadata. | Does not expose provider credentials. |
+
+### Arrow, notebook, and query-control APIs
+
+| API | What it does |
+| --- | --- |
+| `LazyPlan.collect()` | Executes a plan and returns display dictionaries. |
+| `LazyPlan.to_pyarrow()` / `MediaSession.sql_arrow(query)` | Returns a PyArrow `RecordBatchReader` using Arrow's C stream interface. |
+| `LazyPlan.to_arrow_c_stream()` / `MediaSession.sql_arrow_c_stream(query)` | Returns an Arrow C data-interface capsule for another compatible consumer. |
+| `LazyPlan.to_arrow_ipc()` / `MediaSession.sql_arrow_ipc(query)` | Materializes the result as Arrow IPC bytes for compatibility. |
+| `to_pandas(value)` / `display(value, max_rows=100)` | Optional notebook helpers that materialize a plan through PyArrow and pandas. |
+| `create_query(deadline_millis=None)`, `execute_query(id, sql)`, `query_status(id)`, `cancel_query(id)` | Exposes governed query IDs, deadline, status/row metrics, and cooperative cancellation. |
+| `collect_with_progress(session, id, sql)` | Runs a registered query in a worker and reports actual status/row updates; it never fabricates a percent complete. |
+
+### Documents, media, and retrieval
+
+| API | Functionality | Availability |
+| --- | --- | --- |
+| `document_sections(uri)` | Lazy PDF page / DOCX paragraph rows. | Local path or `file://`. |
+| `document_tables(uri)` | Lazy DOCX table-cell rows. | Local path or `file://`. |
+| `document_images(uri, include_bytes=False)` | Lazy DOCX embedded-image metadata, with bytes only when requested. | Local path or `file://`. |
+| `document_search(uri, query, limit)` | Bounded local document text search. | Query must be nonempty; limit is at most 1,024. |
+| `video_frames(uri, start, end, every, limit, include_rgb24=False)` | Lazy sampled video-frame rows. | `native-media` wheel with target-matched FFmpeg; max 32 frames. |
+| `audio_segments(uri, start, end, segment, limit, include_payload=False)` | Lazy normalized mono 16 kHz `f32le` audio chunks. | `native-media` wheel with target-matched FFmpeg; max 1,024 chunks. |
+| `plan_video_frames(timestamps, ...)` | Plans bounded frame timestamps without decoding media. | Available in every wheel. |
+| `semantic_search(query, limit, candidate_limit=0)` | Lazy embedding search. | `candidate_limit=0` is exact; a positive value is explicitly approximate. |
+| `hybrid_search(query, limit, candidate_limit=0, semantic_weight=0.5)` | Lazy lexical plus embedding ranking. | Requires compatible registered indexes; weight is 0–1. |
+| `refresh_embedding_index(snapshot, manifest, rows)` | Persists derived embedding rows and returns emitted/changed counts. | Local paths only; rows use `DerivedIndexRow` lineage. |
+
+### Durable catalog and optional integrations
+
+| API | Functionality | Boundary |
+| --- | --- | --- |
+| `LocalCatalog(path=None)` | Durable local catalog; `execute_ddl`, `table_names`, `refresh`, and `register_in_session`. | Local-only. |
+| `write_delta_ipc(uri, ipc, mode, schema_mode, ...)` | Writes a local Delta table from Arrow IPC and returns the committed version. | `delta-rs`; local `file://` only; modes are create/append/overwrite. |
+| `UnityQueryContext`, `UnityCatalog(base_url, token_supplier)` | Resolves and registers Unity metadata with a fresh per-request token callback. | `unity`; validate live access in protected CI. |
+| `register_unity_local_parquet` / `attach_unity_schema` | Attaches already resolved local Parquet Unity metadata. | `unity`; remote temporary credentials never cross the Python boundary. |
+| `FlightServer(session)`, `FlightClient(endpoint, auth_supplier=None)` | Starts a local Flight SQL server or executes a Flight SQL query. | `flight`; client endpoint validation is loopback/HTTPS only. |
+| `EmbeddingSubprocessConfig`, `MediaSession.with_embedding_subprocess(config)` | Uses a locally installed batch embedding adapter through direct argv. | `embedding-subprocess`; no model/executable is bundled. |
+
+`EmbeddingRecord` and `EmbeddingSubprocessConfig` are public package exports.
+The latter is present only in a wheel built with `embedding-subprocess`.
 
 For example, document results remain lazy until consumed:
 

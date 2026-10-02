@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from .credentials import FlightAuthSupplier, OAuthTokenSupplier
 from ._lakeprism import (
     DerivedIndexRow,
+    EmbeddingRecord,
     LazyPlan,
     LocalCatalog,
     MediaRef,
@@ -25,6 +26,7 @@ from ._lakeprism import (
 
 __all__ = [
     "DerivedIndexRow",
+    "EmbeddingRecord",
     "FlightAuthSupplier",
     "LazyPlan",
     "LocalCatalog",
@@ -117,6 +119,9 @@ def collect_with_progress(session, query_id, query, *, poll_interval=0.1, on_upd
                 sleep(poll_interval)
             rows = future.result()
             status = session.query_status(query_id)
+            if status["status"] == "running":
+                sleep(poll_interval)
+                status = session.query_status(query_id)
             if on_update is not None:
                 on_update(status)
             return rows
@@ -189,3 +194,10 @@ except ImportError:
     pass
 else:
     __all__.append("write_delta_ipc")
+
+try:
+    from ._lakeprism import EmbeddingSubprocessConfig
+except ImportError:
+    pass
+else:
+    __all__.append("EmbeddingSubprocessConfig")

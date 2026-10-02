@@ -91,6 +91,7 @@ def test_local_capability_helpers_validate_bounded_decode_requests():
 
 
 def test_mock_embedding_search_is_explicit_and_reports_ranking_semantics():
+    assert "EmbeddingRecord" in lakeprism.__all__
     session = lakeprism.MediaSession(embedding_mock_dimensions=8)
     session.register_embedding_records(
         [

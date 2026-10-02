@@ -467,7 +467,9 @@ impl PythonFlightServer {
         listener
             .set_nonblocking(true)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-        let listener = tokio::net::TcpListener::from_std(listener)
+        let listener = self
+            .runtime
+            .block_on(async { tokio::net::TcpListener::from_std(listener) })
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         let service = lakeprism_flight::FlightSqlServer::new(Arc::clone(&self.session));
         let endpoint = format!("http://{address}");
@@ -971,38 +973,7 @@ impl PythonMediaSession {
                 .block_on(self.inner.collect(query))
                 .map_err(|error| PyRuntimeError::new_err(error.to_string()))
         })?;
-        let mut rows = Vec::new();
-
-        for batch in batches {
-            let schema = batch.schema();
-            let mut names = HashSet::new();
-            for field in schema.fields() {
-                if !names.insert(field.name()) {
-                    return Err(PyValueError::new_err(
-                        "SQL result column names must be unique; use AS aliases",
-                    ));
-                }
-            }
-            for row_index in 0..batch.num_rows() {
-                let row = PyDict::new(py);
-                for (column_index, field) in schema.fields().iter().enumerate() {
-                    let column = batch.column(column_index);
-                    let value = if column.is_null(row_index) {
-                        py.None()
-                    } else {
-                        arrow::util::display::array_value_to_string(column.as_ref(), row_index)
-                            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
-                            .into_pyobject(py)?
-                            .into_any()
-                            .unbind()
-                    };
-                    row.set_item(field.name(), value)?;
-                }
-                rows.push(row.unbind());
-            }
-        }
-
-        Ok(rows)
+        batches_to_python_rows(py, batches)
     }
 
     fn execute(&self, py: Python<'_>, query: &str) -> PyResult<Vec<Py<PyDict>>> {
@@ -1340,7 +1311,8 @@ fn batches_to_python_rows(
         let schema = batch.schema();
         let mut names = HashSet::new();
         for field in schema.fields() {
-            if !names.insert(field.name()) {
+            let name = python_column_name(field.name());
+            if !names.insert(name.clone()) {
                 return Err(PyValueError::new_err(
                     "SQL result column names must be unique; use AS aliases",
                 ));
@@ -1359,12 +1331,20 @@ fn batches_to_python_rows(
                         .into_any()
                         .unbind()
                 };
-                row.set_item(field.name(), value)?;
+                row.set_item(python_column_name(field.name()), value)?;
             }
             rows.push(row.unbind());
         }
     }
     Ok(rows)
+}
+
+fn python_column_name(name: &str) -> String {
+    let name = name.rsplit('.').next().unwrap_or(name);
+    match name.rsplit_once('[') {
+        Some((_, field)) if field.ends_with(']') => field[..field.len() - 1].to_owned(),
+        _ => name.to_owned(),
+    }
 }
 
 struct QueryStreamReader {
@@ -1787,5 +1767,12 @@ mod tests {
             audio_segments_sql("file:///clip.mp4", 0, 1_000, 100, 8, true),
             "SELECT * FROM lakeprism_audio_segments('file:///clip.mp4', 0, 1000, 100, 8, true)"
         );
+    }
+
+    #[test]
+    fn python_column_names_flatten_struct_projection_fields() {
+        assert_eq!(python_column_name("clips.media[uri]"), "uri");
+        assert_eq!(python_column_name("catalog.schema.name"), "name");
+        assert_eq!(python_column_name("answer"), "answer");
     }
 }
