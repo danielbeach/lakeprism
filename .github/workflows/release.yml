@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   package:
     name: CLI and GitHub artifacts
@@ -25,11 +30,20 @@ jobs:
       - name: Install target-matched native dependencies
         run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev pkg-config
       - name: Verify locked source
-        run: cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --workspace --exclude lakeprism-python --all-targets --features s3,delta-rs,iceberg-rest,unity,fixture-provider -- -D warnings
+          cargo test --locked --workspace --exclude lakeprism-python --all-targets --features s3,delta-rs,iceberg-rest,unity,fixture-provider
+          bash scripts/check-cold-warm-benchmark.sh
       - name: Verify native acceptance paths
         run: |
           cargo test --locked -p lakeprism-media -p lakeprism-datafusion -p lakeprism-flight --features native-media
-          cargo clippy --locked -p lakeprism-python --features native-media,flight,whisper-subprocess -- -D warnings
+          cargo check --locked --workspace --all-features
+          cargo clippy --locked -p lakeprism-python --all-features -- -D warnings
+          uv venv .native-venv
+          uv pip install --python .native-venv/bin/python maturin==1.10.2 pytest pyarrow
+          VIRTUAL_ENV="$PWD/.native-venv" .native-venv/bin/maturin develop --locked --manifest-path crates/lakeprism-python/Cargo.toml --all-features
+          LAKEPRISM_NATIVE_MEDIA=1 .native-venv/bin/python -m pytest crates/lakeprism-python/python/lakeprism/test_bindings.py
       - name: Build CLI artifact
         run: |
           cargo build --locked --release -p lakeprism-cli
@@ -47,6 +61,7 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, 'a') || contains(github.ref_name, 'b') || contains(github.ref_name, 'rc') }}
           files: |
             dist/release/lakeprism
             dist/release/lakeprism-source.tar.gz

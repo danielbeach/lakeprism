@@ -265,6 +265,35 @@ def test_python_native_media_path_decodes_a_real_ffmpeg_fixture(tmp_path):
     assert rows[0]["height"] == "16"
 
 
+@pytest.mark.parametrize("sample_rate", [8000, 44100, 48000])
+def test_python_native_audio_preserves_resampled_tail_and_time_bounds(tmp_path, sample_rate):
+    if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
+        pytest.skip("native FFmpeg acceptance is enabled only on a matched CI host")
+
+    pytest.importorskip("pyarrow")
+    fixture = tmp_path / "native-audio.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"sine=frequency=1000:sample_rate={sample_rate}:duration=0.12",
+            "-ac", "2", str(fixture),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    reader = lakeprism.MediaSession().audio_segments(
+        fixture.as_uri(), 0, 120, 40, 3, include_payload=True
+    ).to_pyarrow()
+    rows = reader.read_all().to_pylist()
+
+    assert len(rows) == 3
+    assert [(row["start_millis"], row["end_millis"]) for row in rows] == [
+        (0, 40), (40, 80), (80, 120)
+    ]
+    assert all(row["sample_rate_hz"] == 16000 and row["channel_count"] == 1 for row in rows)
+    assert sum(len(row["f32le"]) for row in rows) == 1920 * 4
+
+
 def test_optional_callback_and_delta_surfaces_do_not_require_secret_objects():
     assert hasattr(lakeprism, "OAuthTokenSupplier")
     assert hasattr(lakeprism, "FlightAuthSupplier")

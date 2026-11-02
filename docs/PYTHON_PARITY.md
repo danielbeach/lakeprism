@@ -45,9 +45,10 @@ write safety requires scoped credentials plus an explicit remote-write guard.
   DataFusion subset; parameter binding and server-side callback authentication
   remain upstream/application-boundary concerns. Python can use request-local
   Flight bearer supply for client requests.
-* This workstation has mismatched arm64 Rust and x86_64 FFmpeg/Python native
-  libraries. Source/all-feature checks are valid locally; matched-host CI runs
-  Maturin, PyO3, and FFmpeg runtime acceptance.
+* Native validation requires matched Rust, FFmpeg, and Python architectures.
+  This workstation has both Intel and arm64 installations; selecting arm64
+  Homebrew libraries and an arm64 Python interpreter enables actual local
+  FFmpeg/PyO3 acceptance. See `docs/ACCEPTANCE_MATRIX.md` for the environment.
 
 See `docs/ACCEPTANCE_MATRIX.md` for commands and the CI runtime contract.
 
@@ -57,10 +58,18 @@ Use `bash scripts/build-python-wheels.sh --platform native --out dist/python`
 from the repository root. The script invokes Maturin through `uv`, builds the
 PyO3 `abi3-py39` extension, and rejects cross-target builds. This is required
 because the extension and optional FFmpeg bindings must link and run on their
-actual target host. The root README documents the supported native manylinux,
+actual target host. The script also rejects a mismatched Python interpreter;
+select one explicitly with `--python` when the default runs under Rosetta.
+The root README documents the native manylinux/musllinux x86_64/aarch64,
 macOS x86_64/aarch64, and Windows x86_64 matrix. Standard portable wheels omit
 `native-media`; build that feature separately only with
 target-matched FFmpeg development libraries.
+
+Release smoke tests install each wheel on CPython 3.9, 3.12, and 3.14 and run
+copied tests outside the source package under Python isolated mode. Alpine
+tests do not install PyArrow; PyArrow-dependent notebook extras on musllinux
+are not validated. Source installations enable the same default Maturin
+features as portable wheels.
 
 ## Equivalent workflows
 

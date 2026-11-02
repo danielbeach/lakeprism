@@ -3346,7 +3346,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-arrow"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "lakeprism-core",
@@ -3354,7 +3354,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-catalog"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "datafusion",
  "fs2",
@@ -3369,7 +3369,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -3389,7 +3389,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-datafusion"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -3421,7 +3421,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-delta"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "datafusion",
@@ -3437,7 +3437,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-derived"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "datafusion",
@@ -3455,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-documents"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lopdf",
  "quick-xml 0.42.0",
@@ -3465,7 +3465,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-embedding"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lakeprism-core",
  "lakeprism-index",
@@ -3478,7 +3478,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-execution"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -3494,7 +3494,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-flight"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-iceberg"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -3529,7 +3529,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-index"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lakeprism-core",
  "serde",
@@ -3539,7 +3539,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-media"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "ffmpeg-next",
  "lakeprism-core",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-python"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -3578,7 +3578,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-storage"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "async-trait",
  "lakeprism-core",
@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-unity"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "arrow",
  "async-trait",
@@ -3615,7 +3615,7 @@ dependencies = [
 
 [[package]]
 name = "lakeprism-whisper"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "lakeprism-core",
  "lakeprism-index",

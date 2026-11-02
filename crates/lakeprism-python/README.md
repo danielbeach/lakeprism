@@ -1,7 +1,7 @@
 # LakePrism Python
 
 `lakeprism` is the Maturin/PyO3 notebook binding for the local LakePrism
-session. Install a wheel with `pip install lakeprism`, or build from this
+session. Install the alpha with `pip install lakeprism==0.1.0a1`, or build from this
 repository:
 
 ```bash
@@ -16,7 +16,10 @@ The builder uses `uv tool run` to manage Maturin. It intentionally rejects
 cross-target builds: PyO3 and optional FFmpeg must link on the target-native
 host. LakePrism uses the PyO3 `abi3-py39` policy, producing one `cp39-abi3`
 wheel for CPython 3.9+. See the repository README for the supported
-manylinux x86_64, macOS (x86_64/aarch64), and Windows x86_64 release matrix.
+manylinux and musllinux (x86_64/aarch64), macOS (x86_64/aarch64), and Windows
+x86_64 release matrix. The workflow tests ordinary CPython 3.9, 3.12, and 3.14.
+PyPy and free-threaded Python are not included. Alpine core bindings are tested
+without PyArrow; PyArrow-dependent notebook extras on Alpine are not validated.
 
 ## Capability parity and limits
 
@@ -43,8 +46,10 @@ token—and redacts native credential types. Unity temporary table credentials a
 Python. `OAuthTokenSupplier` and `FlightAuthSupplier` document the callback
 shapes. `FlightClient(endpoint, auth_supplier=...)` invokes its callback for
 each execution and sends the result only as that request's Authorization
-header, but the Python client rejects non-loopback endpoints. Remote Flight
-deployment and authentication policy remain Rust application-boundary work.
+header. Local Python round trips are tested; the client accepts loopback HTTP
+or HTTPS endpoint shapes but exposes no remote TLS deployment configuration.
+Remote Flight deployment and authentication policy remain Rust
+application-boundary work.
 
 Iceberg's Arrow-59 upstream provider currently accepts an already constructed
 Rust `iceberg::Table`; its REST construction and credentialed storage client

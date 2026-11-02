@@ -9,7 +9,8 @@ Usage: scripts/build-python-wheels.sh [options]
 Build one target-matched LakePrism Python wheel with uv-managed Maturin.
 
 Options:
-  --platform NAME       manylinux-x86_64, musllinux-x86_64,
+  --platform NAME       manylinux-x86_64, manylinux-aarch64,
+                        musllinux-x86_64, musllinux-aarch64,
                         macos-x86_64, macos-aarch64, windows-x86_64, or native
                         (default: native)
   --target TRIPLE       Rust target triple; it must equal `rustc -vV`'s host.
@@ -103,8 +104,16 @@ case "$platform" in
     expected_target="x86_64-unknown-linux-gnu"
     [[ "$manylinux" != "off" ]] || die "manylinux-x86_64 requires --manylinux POLICY"
     ;;
+  manylinux-aarch64)
+    expected_target="aarch64-unknown-linux-gnu"
+    [[ "$manylinux" != "off" ]] || die "manylinux-aarch64 requires --manylinux POLICY"
+    ;;
   musllinux-x86_64)
     expected_target="x86_64-unknown-linux-musl"
+    [[ "$manylinux" == "off" ]] || die "musllinux wheels must use --manylinux off"
+    ;;
+  musllinux-aarch64)
+    expected_target="aarch64-unknown-linux-musl"
     [[ "$manylinux" == "off" ]] || die "musllinux wheels must use --manylinux off"
     ;;
   macos-x86_64)
@@ -128,6 +137,15 @@ fi
   die "--target $target does not match --platform $platform ($expected_target)"
 [[ "$target" == "$host_target" ]] ||
   die "cross-target build rejected: requested $target, but Rust host is $host_target"
+
+python_machine="$("$python_bin" -c 'import platform; print(platform.machine().lower())')"
+case "$host_target:$python_machine" in
+  aarch64-*:arm64|aarch64-*:aarch64|x86_64-*:x86_64|x86_64-*:amd64)
+    ;;
+  *)
+    die "Python architecture $python_machine does not match Rust host $host_target; select a matching interpreter with --python"
+    ;;
+esac
 
 if ((native_media)); then
   features="${features:+$features,}native-media"

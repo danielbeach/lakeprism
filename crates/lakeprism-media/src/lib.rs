@@ -245,7 +245,7 @@ pub fn decode_audio_segments(
     segment_millis: u64,
     max_segments: usize,
 ) -> Result<Vec<AudioSegment>, MediaError> {
-    use ffmpeg_next::{codec, format, frame, media, software, util};
+    use ffmpeg_next::{codec, format, frame, media, util};
 
     if segment_millis == 0 || max_segments == 0 || end_millis <= start_millis {
         return Ok(Vec::new());
@@ -263,23 +263,10 @@ pub fn decode_audio_segments(
     let context = codec::context::Context::from_parameters(stream.parameters())?;
     let mut decoder = context.decoder().audio()?;
     decoder.set_parameters(stream.parameters())?;
-    let input_layout = decoder.channel_layout();
-    let input_rate = decoder.rate();
-    if input_rate == 0 || input_layout.channels() == 0 {
-        return Err(MediaError::MissingAudioStream);
-    }
-
     let output_format = util::format::Sample::F32(util::format::sample::Type::Packed);
-    let mut resampler = software::resampling::Context::get(
-        decoder.format(),
-        input_layout,
-        input_rate,
-        output_format,
-        ffmpeg_next::ChannelLayout::MONO,
-        NORMALIZED_AUDIO_SAMPLE_RATE_HZ,
-    )?;
+    let mut resampler = None;
     let mut decoded = frame::Audio::empty();
-    let mut converted = frame::Audio::empty();
+    let mut output_end_millis = 0;
     let chunk_samples = usize::try_from(
         u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
             .saturating_mul(segment_millis)
@@ -300,11 +287,11 @@ pub fn decode_audio_segments(
         }
         decoder.send_packet(&packet)?;
         while decoder.receive_frame(&mut decoded).is_ok() {
-            let frame_start = frame_timestamp_millis(decoded.timestamp(), time_base).unwrap_or(0);
-            converted = resampled_audio_frame(decoded.samples(), input_rate, output_format);
-            resampler.run(&decoded, &mut converted)?;
+            let frame_start = audio_frame_timestamp_millis(&decoded, time_base, resampler.as_ref());
+            let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
             output.push(frame_start, converted.plane::<f32>(0));
-            converted = frame::Audio::empty();
+            output_end_millis = frame_start
+                + converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
             if output.is_full() {
                 return Ok(output.finish());
             }
@@ -312,20 +299,26 @@ pub fn decode_audio_segments(
     }
     decoder.send_eof()?;
     while decoder.receive_frame(&mut decoded).is_ok() {
-        let frame_start = frame_timestamp_millis(decoded.timestamp(), time_base).unwrap_or(0);
-        converted = resampled_audio_frame(decoded.samples(), input_rate, output_format);
-        resampler.run(&decoded, &mut converted)?;
+        let frame_start = audio_frame_timestamp_millis(&decoded, time_base, resampler.as_ref());
+        let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
         output.push(frame_start, converted.plane::<f32>(0));
-        converted = frame::Audio::empty();
+        output_end_millis = frame_start
+            + converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
         if output.is_full() {
             return Ok(output.finish());
         }
     }
-    while resampler.flush(&mut converted)?.is_some() {
-        output.push(end_millis, converted.plane::<f32>(0));
-        converted = frame::Audio::empty();
-        if output.is_full() {
-            break;
+    if let Some(resampler) = resampler.as_mut() {
+        loop {
+            let mut converted =
+                resampled_audio_frame(0, NORMALIZED_AUDIO_SAMPLE_RATE_HZ, output_format);
+            let delay = resampler.flush(&mut converted)?;
+            output.push(output_end_millis, converted.plane::<f32>(0));
+            output_end_millis +=
+                converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+            if delay.is_none() || converted.samples() == 0 || output.is_full() {
+                break;
+            }
         }
     }
     Ok(output.finish())
@@ -367,11 +360,66 @@ fn resampled_audio_frame(
         .saturating_mul(NORMALIZED_AUDIO_SAMPLE_RATE_HZ as usize)
         .div_ceil(input_rate as usize)
         .saturating_add(32);
-    ffmpeg_next::frame::Audio::new(
+    let mut frame = ffmpeg_next::frame::Audio::new(
         output_format,
         output_samples,
         ffmpeg_next::ChannelLayout::MONO,
-    )
+    );
+    frame.set_rate(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+    frame
+}
+
+#[cfg(feature = "native-media")]
+fn audio_frame_timestamp_millis(
+    decoded: &ffmpeg_next::frame::Audio,
+    time_base: ffmpeg_next::Rational,
+    resampler: Option<&ffmpeg_next::software::resampling::Context>,
+) -> u64 {
+    let delay_millis = resampler
+        .and_then(|resampler| resampler.delay())
+        .map_or(0, |delay| {
+            delay.output as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
+        });
+    frame_timestamp_millis(decoded.timestamp(), time_base)
+        .unwrap_or(0)
+        .saturating_sub(delay_millis)
+}
+
+#[cfg(feature = "native-media")]
+fn resample_audio_frame(
+    decoded: &mut ffmpeg_next::frame::Audio,
+    resampler: &mut Option<ffmpeg_next::software::resampling::Context>,
+    output_format: ffmpeg_next::util::format::Sample,
+) -> Result<ffmpeg_next::frame::Audio, MediaError> {
+    let input_rate = decoded.rate();
+    let input_channels = i32::from(decoded.channels());
+    if input_rate == 0 || input_channels == 0 {
+        return Err(MediaError::MissingAudioStream);
+    }
+    let input_layout = decoded.channel_layout();
+    let input_layout = if input_layout.is_empty() {
+        let input_layout = ffmpeg_next::ChannelLayout::default(input_channels);
+        decoded.set_channel_layout(input_layout);
+        input_layout
+    } else {
+        input_layout
+    };
+    if resampler.is_none() {
+        *resampler = Some(ffmpeg_next::software::resampling::Context::get(
+            decoded.format(),
+            input_layout,
+            input_rate,
+            output_format,
+            ffmpeg_next::ChannelLayout::MONO,
+            NORMALIZED_AUDIO_SAMPLE_RATE_HZ,
+        )?);
+    }
+    let mut converted = resampled_audio_frame(decoded.samples(), input_rate, output_format);
+    resampler
+        .as_mut()
+        .expect("resampler is initialized above")
+        .run(decoded, &mut converted)?;
+    Ok(converted)
 }
 
 #[cfg(feature = "native-media")]
@@ -635,6 +683,22 @@ mod tests {
                 && !segment.f32le_bytes.is_empty()
                 && segment.f32le_bytes.len() % std::mem::size_of::<f32>() == 0
         }));
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.f32le_bytes.len())
+                .sum::<usize>(),
+            1_920 * std::mem::size_of::<f32>()
+        );
+        assert_eq!(segments[2].end_millis, 120);
+        let window = decode_audio_segments(&output_path, 40, 80, 40, 1).unwrap();
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].start_millis, 40);
+        assert_eq!(window[0].end_millis, 80);
+        assert_eq!(
+            window[0].f32le_bytes.len(),
+            640 * std::mem::size_of::<f32>()
+        );
         std::fs::remove_file(output_path).unwrap();
     }
 }

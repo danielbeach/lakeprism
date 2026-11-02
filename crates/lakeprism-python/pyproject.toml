@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "lakeprism"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Notebook-friendly bindings for governed local LakePrism queries"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -22,6 +22,8 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Database",
 ]
 
@@ -42,3 +44,4 @@ test = ["pytest>=7"]
 [tool.maturin]
 module-name = "lakeprism._lakeprism"
 python-source = "python"
+features = ["flight", "delta-rs", "unity", "whisper-subprocess"]

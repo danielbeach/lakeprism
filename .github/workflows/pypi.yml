@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish the assembled artifacts to PyPI
+        description: Rehearse on TestPyPI, then publish the same artifacts to PyPI
         required: true
         default: false
         type: boolean
@@ -14,69 +14,137 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  LAKEPRISM_PYTHONS: "3.9 3.12 3.14"
+
 jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: version
+        name: Check release identity before building
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("crates/lakeprism-python/pyproject.toml").read_text())
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          version = project["project"]["version"]
+          rust_version = workspace["workspace"]["package"]["version"]
+          assert rust_version.replace("-alpha.", "a").replace("-beta.", "b").replace("-rc.", "rc") == version
+          ref = os.environ["GITHUB_REF"]
+          if ref.startswith("refs/tags/"):
+              assert ref == f"refs/tags/v{version}", "release tag must match package version"
+          elif os.environ["PUBLISH"] == "true":
+              assert ref == "refs/heads/main", "manual publication is restricted to main"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
+
+  validation:
+    uses: ./.github/workflows/ci.yml
+
   wheel:
-    name: ${{ matrix.name }}
+    name: Wheel / ${{ matrix.name }}
+    needs: metadata
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
+      matrix: &wheel-matrix
         include:
           - name: manylinux-x86_64
             runner: ubuntu-24.04
-            platform: manylinux-x86_64
-            manylinux: "2_28"
+            target: x86_64-unknown-linux-gnu
+            policy: "2_28"
+            image: quay.io/pypa/manylinux_2_28_x86_64
+            musl: "0"
+          - name: manylinux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            policy: "2_28"
+            image: quay.io/pypa/manylinux_2_28_aarch64
+            musl: "0"
+          - name: musllinux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            policy: musllinux_1_2
+            image: quay.io/pypa/musllinux_1_2_x86_64
+            musl: "1"
+          - name: musllinux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            policy: musllinux_1_2
+            image: quay.io/pypa/musllinux_1_2_aarch64
+            musl: "1"
           - name: macos-x86_64
-            runner: macos-13
-            platform: macos-x86_64
-            manylinux: "off"
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            policy: "off"
+            image: "off"
+            musl: "0"
           - name: macos-aarch64
-            runner: macos-14
-            platform: macos-aarch64
-            manylinux: "off"
+            runner: macos-15
+            target: aarch64-apple-darwin
+            policy: "off"
+            image: "off"
+            musl: "0"
           - name: windows-x86_64
             runner: windows-2022
-            platform: windows-x86_64
-            manylinux: "off"
-            cross: false
+            target: x86_64-pc-windows-msvc
+            policy: "off"
+            image: "off"
+            musl: "0"
+    env:
+      RUSTFLAGS: ${{ matrix.musl == '1' && '-C target-feature=-crt-static' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
+        if: runner.os != 'Linux'
         with:
           python-version: "3.9"
       - uses: astral-sh/setup-uv@v6
-      - name: Build ABI3 wheel
-        shell: bash
+      - name: Build native ABI3 wheel
+        uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
+        with:
+          maturin-version: v1.10.2
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.policy }}
+          container: ${{ matrix.image }}
+          args: --release --locked --manifest-path crates/lakeprism-python/Cargo.toml --interpreter ${{ runner.os == 'Linux' && 'python3.9' || 'python' }} --out dist/python
+      - name: Test installed Linux wheel in its native libc container
+        if: runner.os == 'Linux'
+        env:
+          IMAGE: ${{ matrix.image }}
+          LAKEPRISM_MUSL: ${{ matrix.musl }}
         run: |
-          args=(--platform "${{ matrix.platform }}" --out dist/python)
-          if [[ "${{ matrix.manylinux }}" != "off" ]]; then
-            args+=(--manylinux "${{ matrix.manylinux }}")
-          fi
-          bash scripts/build-python-wheels.sh "${args[@]}"
-      - name: Smoke-test wheel in a clean virtual environment
+          docker run --rm -v "$PWD:/io" -w /io \
+            -e LAKEPRISM_PYTHONS -e LAKEPRISM_MUSL "$IMAGE" bash -c '
+              export PATH=/opt/python/cp39-cp39/bin:$PATH
+              python -m pip install uv
+              bash scripts/test-python-wheel.sh dist/python
+            '
+      - name: Test installed macOS or Windows wheel
+        if: runner.os != 'Linux'
         shell: bash
-        run: |
-          uv venv --clear .wheel-smoke-venv
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            python_bin=".wheel-smoke-venv/Scripts/python.exe"
-          else
-            python_bin=".wheel-smoke-venv/bin/python"
-          fi
-          uv pip install --python "$python_bin" --no-deps dist/python/*.whl
-          "$python_bin" -c 'import lakeprism; print(lakeprism.__file__)'
-          "$python_bin" - <<'PY'
-          import glob
-          import tarfile
-          import zipfile
-
-          wheel = glob.glob("dist/python/*.whl")
-          assert len(wheel) == 1, wheel
-          with zipfile.ZipFile(wheel[0]) as archive:
-              names = archive.namelist()
-          assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
-          PY
-          rm -rf .wheel-smoke-venv
+        run: bash scripts/test-python-wheel.sh dist/python
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.name }}
@@ -84,62 +152,149 @@ jobs:
           if-no-files-found: error
 
   source:
+    needs: metadata
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
       - uses: astral-sh/setup-uv@v6
-      - name: Build source distribution
+      - name: Build and install source distribution
         run: |
-          mkdir -p dist/python
-          uv tool run --from 'maturin==1.10.2' maturin sdist \
-            --manifest-path crates/lakeprism-python/Cargo.toml \
-            --out dist/python
-      - name: Smoke-test source distribution in a clean virtual environment
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import glob
-          import tarfile
-
-          sdist = glob.glob("dist/python/*.tar.gz")
-          assert len(sdist) == 1, sdist
-          with tarfile.open(sdist[0]) as archive:
-              names = archive.getnames()
-          assert any(name.endswith("/LICENSE") for name in names), names
-          PY
-          uv venv --clear .sdist-smoke-venv
+          uv tool run --from maturin==1.10.2 maturin sdist \
+            --manifest-path crates/lakeprism-python/Cargo.toml --out dist/python
+          uv venv --python 3.12 .sdist-smoke-venv
           uv pip install --python .sdist-smoke-venv/bin/python --no-deps dist/python/*.tar.gz
-          .sdist-smoke-venv/bin/python -c 'import lakeprism; print(lakeprism.__file__)'
-          rm -rf .sdist-smoke-venv
+          uv pip install --python .sdist-smoke-venv/bin/python pytest pyarrow
+          mkdir -p target/sdist-smoke-tests
+          cp crates/lakeprism-python/python/lakeprism/test_bindings.py target/sdist-smoke-tests/
+          .sdist-smoke-venv/bin/python -I -m pytest --import-mode=importlib -q target/sdist-smoke-tests/test_bindings.py
       - uses: actions/upload-artifact@v4
         with:
           name: source-distribution
           path: dist/python/*.tar.gz
           if-no-files-found: error
 
-  publish:
+  artifacts:
+    needs: [metadata, wheel, source]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist/python
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: source-distribution
+          path: dist/python
+      - uses: astral-sh/setup-uv@v6
+      - name: Check complete artifact set, versions, licenses and metadata
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          uv run --no-project --python 3.12 scripts/verify-python-artifacts.py dist/python "$VERSION"
+          uv tool run --from twine==6.1.0 twine check dist/python/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-release
+          path: dist/python/*
+          if-no-files-found: error
+
+  testpypi:
     if: github.event_name == 'push' || inputs.publish
-    needs: [wheel, source]
+    needs: [validation, artifacts]
     runs-on: ubuntu-24.04
     environment:
-      name: pypi
-      url: https://pypi.org/project/lakeprism
+      name: testpypi
+      url: https://test.pypi.org/project/lakeprism/
     permissions:
       id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: wheel-*
+          name: validated-release
           path: dist
-          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  testpypi-artifacts:
+    needs: [metadata, testpypi]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: source-distribution
+          name: validated-release
+          path: dist/python
+      - uses: astral-sh/setup-uv@v6
+      - env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: uv run --no-project --python 3.12 scripts/verify-python-artifacts.py dist/python "$VERSION" --index https://test.pypi.org
+
+  testpypi-runtime:
+    name: TestPyPI / ${{ matrix.name }}
+    needs: [metadata, testpypi-artifacts]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: *wheel-matrix
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      RELEASE_INDEX: https://test.pypi.org/simple/
+      LAKEPRISM_MUSL: ${{ matrix.musl }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install uploaded Linux wheel and run binding tests
+        if: runner.os == 'Linux'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm -v "$PWD:/io" -w /io \
+            -e RELEASE_VERSION -e RELEASE_INDEX -e LAKEPRISM_PYTHONS -e LAKEPRISM_MUSL \
+            "$IMAGE" bash -c '
+              export PATH=/opt/python/cp39-cp39/bin:$PATH
+              python -m pip install uv
+              bash scripts/test-python-wheel.sh "lakeprism==$RELEASE_VERSION" "$RELEASE_INDEX"
+            '
+      - name: Install uploaded macOS or Windows wheel and run binding tests
+        if: runner.os != 'Linux'
+        shell: bash
+        run: bash scripts/test-python-wheel.sh "lakeprism==$RELEASE_VERSION" "$RELEASE_INDEX"
+
+  publish:
+    needs: testpypi-runtime
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/lakeprism/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-release
           path: dist
-      - name: Validate distribution metadata
-        run: uv tool run --from 'twine==6.1.0' twine check dist/*
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  verify-pypi:
+    needs: [metadata, publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-release
+          path: dist/python
+      - uses: astral-sh/setup-uv@v6
+      - env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          LAKEPRISM_PYTHONS: "3.12"
+        run: |
+          uv run --no-project --python 3.12 scripts/verify-python-artifacts.py dist/python "$VERSION" --index https://pypi.org
+          bash scripts/test-python-wheel.sh "lakeprism==$VERSION" https://pypi.org/simple/

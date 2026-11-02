@@ -6,7 +6,7 @@ It is designed for notebooks and small governed services where execution,
 credentials, and data locality must remain explicit.
 
 **Status: alpha.** The Python extension is usable for local development and
-the release workflow is in place, but version `0.1.0` has not been published
+the release workflow is in place, but version `0.1.0a1` has not been published
 to PyPI. See [Release readiness](#release-readiness) before depending on it.
 
 ## Install
@@ -148,7 +148,7 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 | `write_delta_ipc(uri, ipc, mode, schema_mode, ...)` | Writes a local Delta table from Arrow IPC and returns the committed version. | `delta-rs`; local `file://` only; modes are create/append/overwrite. |
 | `UnityQueryContext`, `UnityCatalog(base_url, token_supplier)` | Resolves and registers Unity metadata with a fresh per-request token callback. | `unity`; validate live access in protected CI. |
 | `register_unity_local_parquet` / `attach_unity_schema` | Attaches already resolved local Parquet Unity metadata. | `unity`; remote temporary credentials never cross the Python boundary. |
-| `FlightServer(session)`, `FlightClient(endpoint, auth_supplier=None)` | Starts a local Flight SQL server or executes a Flight SQL query. | `flight`; client endpoint validation is loopback/HTTPS only. |
+| `FlightServer(session)`, `FlightClient(endpoint, auth_supplier=None)` | Starts a local Flight SQL server or executes a Flight SQL query. | `flight`; local round trips are tested; remote TLS policy is application-owned. |
 | `EmbeddingSubprocessConfig`, `MediaSession.with_embedding_subprocess(config)` | Uses a locally installed batch embedding adapter through direct argv. | `embedding-subprocess`; no model/executable is bundled. |
 
 `EmbeddingRecord` and `EmbeddingSubprocessConfig` are public package exports.
@@ -225,9 +225,11 @@ SQL text, or logs.
 - **Unity Catalog:** `UnityCatalog` accepts an application callback that returns
   a fresh token for one request. LakePrism keeps the callback, not the token.
   Validate this path in a protected Databricks environment before production.
-- **Flight SQL:** `FlightServer` and `FlightClient` are feature-gated. The
-  Python client only accepts loopback endpoints; remote server deployment and
-  authentication policy belong at the Rust application boundary.
+- **Flight SQL:** `FlightServer` and `FlightClient` are feature-gated. Local
+  Python round trips are tested. The client accepts loopback HTTP or HTTPS
+  endpoint shapes, but does not expose remote TLS deployment configuration.
+  Remote server deployment and authentication policy belong at the Rust
+  application boundary.
 - **Iceberg, S3 staging, custom media resolvers, OCR, transcription, image
   understanding, and distributed workers:** these are intentionally not
   arbitrary Python callbacks. Their resource, cancellation, and credential
@@ -268,29 +270,48 @@ object storage, custom media/model providers, or worker execution.
 
 ## Release readiness
 
-The package is **not ready to publish to PyPI today**. The local package
-artifacts are healthy: the wheel and source distribution pass `twine check`,
-include Apache-2.0 license text, install into clean environments, and import
-successfully on the development host. The package metadata, ABI policy, and
-trusted-publisher workflow are present.
+The first release is the explicit prerelease **`0.1.0a1`**. The PyPI workflow
+builds seven native-target wheel variants: manylinux x86_64/arm64, musllinux
+x86_64/arm64 (Alpine), macOS Intel/Apple Silicon, and Windows x86_64.
+The ABI policy targets ordinary GIL-enabled CPython 3.9+; free-threaded Python,
+PyPy, Windows arm64, and 32-bit systems are not part of this matrix.
 
-Before publishing `0.1.0`, complete these release gates:
+Publishing requires all of these gates in the same workflow run:
 
-1. Run the PyPI workflow successfully on its supported matrix: manylinux
-   x86_64, macOS x86_64, macOS arm64, and Windows x86_64. Each job builds,
-   installs, and imports its wheel in a clean environment.
-2. Configure the repository as a PyPI trusted publisher and protect the
-   `pypi` GitHub environment. Do not add a long-lived PyPI token.
-3. Decide whether Alpine Linux support is a release requirement. It is not
-   currently distributed; add and validate a dedicated musllinux build before
-   claiming it.
-4. Run the target-matched FFmpeg/PyO3 acceptance workflow and the protected
-   Databricks/Unity acceptance workflow with real non-production credentials.
-5. Promote the package from alpha only after the supported-wheel matrix and
-   release artifacts have been tested from a release tag.
+1. Reusable core/native CI, including actual FFmpeg/PyO3 runtime acceptance.
+2. Clean installed-wheel tests on CPython 3.9, 3.12, and 3.14 for every
+   platform, plus an installed source-distribution test. Tests run outside the
+   source package so a development extension cannot mask a broken wheel.
+3. Exactly seven ABI3 wheels and one source archive with matching versions,
+   license files, and valid distribution metadata.
+4. OIDC publication to TestPyPI, hash verification of all uploaded files,
+   and installed TestPyPI wheel tests on all seven platforms.
+5. Publication of those identical files to production PyPI, followed by
+   production hash and installation checks.
+
+Alpine tests cover the portable core without installing PyArrow, whose
+musllinux distribution is outside this release's control. PyArrow-dependent
+notebook extras on Alpine are not a validated capability.
+
+The GitHub environments `testpypi` and `pypi` allow only `main` and `v*` tags.
+Each package index needs its own trusted publisher for owner `danielbeach`,
+repository `lakeprism`, workflow `pypi.yml`, and the matching environment name.
+No long-lived PyPI API token is needed.
+
+Use the Actions **PyPI** workflow with `publish=false` for build-only
+validation. Set `publish=true` on `main` to perform the full staged release,
+or push a tag matching the package version, such as `v0.1.0a1`. Publishing is
+an external, immutable release action; do not reuse a version for new bytes.
+
+Live Databricks/Unity data-plane acceptance remains an opt-in requirement
+before claiming validated production cloud support. It is not a prerequisite
+for this explicitly local-first alpha.
 
 The workflow publishes only portable base wheels. FFmpeg-enabled wheels need a
 separate dependency-bundling and target-runtime policy before public release.
+The architecture spans several future releases; see
+[plan versus alpha](docs/ACCEPTANCE_MATRIX.md#architecture-plan-versus-the-010-alpha)
+for implemented boundaries and unmet roadmap exit criteria.
 
 ## Development
 
@@ -303,10 +324,12 @@ cargo test
 Python binding tests run on a target-matched native host:
 
 ```bash
-python -m pip install maturin pytest
-maturin develop --manifest-path crates/lakeprism-python/Cargo.toml \
-  --features native-media,flight,delta-rs,unity
-LAKEPRISM_NATIVE_MEDIA=1 pytest crates/lakeprism-python/python/lakeprism/test_bindings.py
+python -m venv .native-venv
+.native-venv/bin/python -m pip install maturin==1.10.2 pytest pyarrow
+VIRTUAL_ENV="$PWD/.native-venv" .native-venv/bin/maturin develop \
+  --locked --manifest-path crates/lakeprism-python/Cargo.toml --all-features
+LAKEPRISM_NATIVE_MEDIA=1 .native-venv/bin/python -m pytest \
+  crates/lakeprism-python/python/lakeprism/test_bindings.py
 ```
 
 See [docs/ACCEPTANCE_MATRIX.md](docs/ACCEPTANCE_MATRIX.md) for the current

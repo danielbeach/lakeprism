@@ -3,6 +3,15 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   rust:
@@ -11,8 +20,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --locked --workspace --exclude lakeprism-python --all-targets --features s3,delta-rs,iceberg-rest,unity,fixture-provider -- -D warnings
+      - run: cargo test --locked --workspace --exclude lakeprism-python --all-targets --features s3,delta-rs,iceberg-rest,unity,fixture-provider
+      - run: bash scripts/check-cold-warm-benchmark.sh
 
   native-runtime:
     # The host, Rust compiler target, FFmpeg development libraries, and Python
@@ -31,7 +41,11 @@ jobs:
       - run: cargo test -p lakeprism-datafusion --features native-media
       - run: cargo test -p lakeprism-flight --features native-media
       - run: cargo test -p lakeprism-cli
-      - run: cargo clippy -p lakeprism-python --features native-media,flight,delta-rs,unity,whisper-subprocess -- -D warnings
-      - run: pip install maturin==1.10.2 pytest
-      - run: maturin develop --manifest-path crates/lakeprism-python/Cargo.toml --features native-media,flight,delta-rs,unity,whisper-subprocess
-      - run: LAKEPRISM_NATIVE_MEDIA=1 pytest crates/lakeprism-python/python/lakeprism/test_bindings.py
+      - run: cargo check --locked --workspace --all-features
+      - run: cargo clippy --locked -p lakeprism-python --all-features -- -D warnings
+      - name: Test Python bindings in an isolated environment
+        run: |
+          python -m venv .native-venv
+          .native-venv/bin/python -m pip install maturin==1.10.2 pytest pyarrow
+          VIRTUAL_ENV="$PWD/.native-venv" .native-venv/bin/maturin develop --locked --manifest-path crates/lakeprism-python/Cargo.toml --all-features
+          LAKEPRISM_NATIVE_MEDIA=1 .native-venv/bin/python -m pytest crates/lakeprism-python/python/lakeprism/test_bindings.py
