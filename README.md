@@ -5,13 +5,19 @@ media, documents, Parquet, and derived features through SQL and Apache Arrow.
 It is designed for notebooks and small governed services where execution,
 credentials, and data locality must remain explicit.
 
-**Status: alpha.** The Python extension is usable for local development and
-the release workflow is in place, but version `0.1.0a1` has not been published
-to PyPI. See [Release readiness](#release-readiness) before depending on it.
+**Status: alpha.** Version [`0.1.0a1`](https://pypi.org/project/lakeprism/0.1.0a1/)
+is published on PyPI with seven platform wheels and a source distribution.
+See [Release readiness](#release-readiness) for validated capabilities and limits.
 
 ## Install
 
-Until the first PyPI release exists, build and install a wheel from a checkout:
+Install the explicit alpha version:
+
+```bash
+python -m pip install lakeprism==0.1.0a1
+```
+
+Or build and install a wheel from a checkout:
 
 ```bash
 git clone https://github.com/danielbeach/lakeprism.git
@@ -21,7 +27,7 @@ python -m pip install dist/python/lakeprism-*.whl
 ```
 
 The wheel uses the CPython `abi3-py39` ABI and supports Python 3.9 or newer.
-For notebook helpers, install `lakeprism[notebook]` after installing the wheel.
+For notebook helpers, install `lakeprism[notebook]==0.1.0a1`.
 Those helpers load PyArrow, pandas, IPython, and tqdm only when called.
 
 The standard wheel includes the local SQL, Arrow, catalog, Delta, Unity, and
@@ -275,6 +281,11 @@ builds seven native-target wheel variants: manylinux x86_64/arm64, musllinux
 x86_64/arm64 (Alpine), macOS Intel/Apple Silicon, and Windows x86_64.
 The ABI policy targets ordinary GIL-enabled CPython 3.9+; free-threaded Python,
 PyPy, Windows arm64, and 32-bit systems are not part of this matrix.
+
+All release gates passed for `0.1.0a1` in
+[the publication run](https://github.com/danielbeach/lakeprism/actions/runs/41513596139),
+including seven-platform TestPyPI installation tests and production artifact
+hash and installation checks.
 
 Publishing requires all of these gates in the same workflow run:
 

@@ -83,6 +83,11 @@ future product work, not capabilities implied by a passing local suite.
 
 ### Release gates outside local validation
 
+Release `0.1.0a1` passed these hosted gates and is published on PyPI.
+[Publication evidence](https://github.com/danielbeach/lakeprism/actions/runs/41513596139)
+covers all seven wheel platforms, the source distribution, TestPyPI rehearsal,
+and production artifact hash and installation checks.
+
 Local checks do not prove a successful GitHub runner matrix or a public
 release. The PyPI workflow requires reusable core/native CI and native-target
 manylinux/musllinux x86_64/arm64, macOS Intel/Apple Silicon, and Windows x86_64
