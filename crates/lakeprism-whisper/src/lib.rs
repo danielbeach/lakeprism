@@ -388,11 +388,17 @@ fn bounded_copy(
 }
 
 fn file_uri_path(uri: &str) -> Option<PathBuf> {
-    let path = uri.strip_prefix("file://")?;
-    if path.contains(['?', '#']) {
+    let uri = url::Url::parse(uri).ok()?;
+    if uri.scheme() != "file"
+        || uri.host_str().is_some_and(|host| host != "localhost")
+        || !uri.username().is_empty()
+        || uri.password().is_some()
+        || uri.query().is_some()
+        || uri.fragment().is_some()
+    {
         return None;
     }
-    Some(PathBuf::from(path))
+    uri.to_file_path().ok()
 }
 fn ensure_active(control: &QueryControl) -> Result<(), WhisperExecutionError> {
     match control.state() {
@@ -465,6 +471,21 @@ mod tests {
     use super::*;
     use lakeprism_core::{MediaRef, StorageMode};
     use lakeprism_storage::{ExecutionGovernorConfig, QueryControl};
+
+    #[test]
+    fn local_file_uris_decode_native_paths_and_reject_nonlocal_inputs() {
+        let path = std::env::current_dir().unwrap().join("recording #1?%.wav");
+        let uri = url::Url::from_file_path(&path).unwrap();
+        assert_eq!(file_uri_path(uri.as_str()), Some(path));
+        for uri in [
+            "https://example.test/audio.wav",
+            "file://example.test/audio.wav",
+            "file:///audio.wav?token=redacted",
+            "file:///audio.wav#fragment",
+        ] {
+            assert_eq!(file_uri_path(uri), None);
+        }
+    }
 
     #[test]
     fn rejects_non_explicit_templates() {

@@ -42,7 +42,9 @@ fn fixture_protocol_transcribes_without_a_model_binary() {
         Arc::new(ExecutionGovernor::new(ExecutionGovernorConfig::default()).unwrap()),
     )
     .unwrap();
-    let source_uri = format!("file://{}", root.join("Cargo.toml").display());
+    let source_uri = url::Url::from_file_path(root.join("Cargo.toml"))
+        .unwrap()
+        .to_string();
     let request = TranscriptionRequest {
         media: MediaRef::new(&source_uri, "audio", StorageMode::External).unwrap(),
         lineage: FeatureLineage {
@@ -100,7 +102,9 @@ fn timeout_kills_the_fixture_child_and_cleans_staging() {
         Arc::new(ExecutionGovernor::new(ExecutionGovernorConfig::default()).unwrap()),
     )
     .unwrap();
-    let source_uri = format!("file://{}", root.join("Cargo.toml").display());
+    let source_uri = url::Url::from_file_path(root.join("Cargo.toml"))
+        .unwrap()
+        .to_string();
     let request = TranscriptionRequest {
         media: MediaRef::new(&source_uri, "audio", StorageMode::External).unwrap(),
         lineage: FeatureLineage {

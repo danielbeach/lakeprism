@@ -309,7 +309,7 @@ def test_whisper_subprocess_transcribes_local_audio_or_video_with_lineage(tmp_pa
     if not hasattr(lakeprism, "WhisperSubprocessConfig"):
         pytest.skip("Whisper subprocess support was not compiled into this extension")
 
-    source = tmp_path / "sample.wav"
+    source = tmp_path / "sample recording.wav"
     source.write_bytes(b"fixture audio")
     model = tmp_path / "model.bin"
     model.write_bytes(b"fixture model")

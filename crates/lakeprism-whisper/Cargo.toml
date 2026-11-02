@@ -18,6 +18,7 @@ lakeprism-storage = { path = "../lakeprism-storage" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [[bin]]
