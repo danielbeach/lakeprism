@@ -122,6 +122,9 @@ jobs:
         with:
           python-version: "3.9"
       - uses: astral-sh/setup-uv@v6
+      - name: Create host-owned wheel output directories
+        shell: bash
+        run: mkdir -p dist/unrepaired dist/python
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
       - uses: msys2/setup-msys2@v2
@@ -160,7 +163,9 @@ jobs:
         uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
         with:
           maturin-version: v1.10.2
-          target: ${{ matrix.target }}
+          # An explicit Cargo target prevents RUSTFLAGS from reaching musl
+          # host build scripts, leaving bindgen unable to load libclang.
+          target: ${{ matrix.musl != '1' && matrix.target || '' }}
           manylinux: ${{ matrix.policy }}
           container: ${{ matrix.image }}
           before-script-linux: |
@@ -169,6 +174,7 @@ jobs:
             else
               yum install -y nasm clang-devel pkgconf-pkg-config
             fi
+            test "$(rustc -vV | sed -n 's/^host: //p')" = '${{ matrix.target }}'
             bash scripts/build-wheel-ffmpeg.sh
             export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
             export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"

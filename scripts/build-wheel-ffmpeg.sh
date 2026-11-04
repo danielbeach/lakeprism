@@ -72,6 +72,15 @@ jobs="$("$python" -c 'import os; print(min(os.cpu_count() or 1, 8))')"
   make -j "$jobs"
   make install
 )
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # FFmpeg installs MSVC import libraries beside its DLLs; ffmpeg-sys
+    # expects the conventional lib/ search directory.
+    for component in avcodec avformat avutil swresample swscale; do
+      cp "$prefix/bin/$component.lib" "$prefix/lib/$component.lib"
+    done
+    ;;
+esac
 grep -q 'CONFIG_GPL 0' "$source/config.h"
 grep -q 'CONFIG_NONFREE 0' "$source/config.h"
 grep -q 'CONFIG_VERSION3 0' "$source/config.h"

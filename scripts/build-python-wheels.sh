@@ -160,12 +160,18 @@ maturin_args=(
   --release
   --locked
   --manifest-path crates/lakeprism-python/Cargo.toml
-  --target "$target"
   --interpreter "$python_bin"
   --features "$features"
   --strip
   --out "$raw"
 )
+if [[ "$host_target" == *-linux-musl ]]; then
+  [[ -z "${CARGO_BUILD_TARGET:-}" ]] ||
+    die "unset CARGO_BUILD_TARGET: musl bindgen needs native host build-script flags"
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=-crt-static"
+else
+  maturin_args+=(--target "$target")
+fi
 if [[ "$manylinux" != "off" ]]; then
   maturin_args+=(--manylinux "$manylinux")
 fi
