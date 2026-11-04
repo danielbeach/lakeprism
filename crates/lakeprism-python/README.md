@@ -1,8 +1,8 @@
 # LakePrism Python
 
 `lakeprism` is the Maturin/PyO3 notebook binding for the local LakePrism
-session. Install the alpha with `pip install lakeprism==0.1.0a1`, or build from this
-repository:
+session. Install the published alpha with `pip install lakeprism==0.1.0a1`, or
+build the next `0.1.0a2` candidate from this repository:
 
 ```bash
 bash scripts/build-python-wheels.sh --platform native --out dist/python
@@ -12,8 +12,14 @@ pip install dist/python/lakeprism-*.whl
 For notebook display helpers install `lakeprism[notebook]`. They import
 PyArrow, pandas, IPython, and tqdm only when called.
 
+Published `0.1.0a1` wheels omit native media decoding. The next candidate
+bundles native FFmpeg shared libraries, LGPL notices, build instructions and
+complete corresponding source, without requiring system FFmpeg at runtime.
+Models remain external. See the repository's
+`examples/local_transcription/README.md` for an actual offline CPU model workflow.
+
 The builder uses `uv tool run` to manage Maturin. It intentionally rejects
-cross-target builds: PyO3 and optional FFmpeg must link on the target-native
+cross-target builds: PyO3 and FFmpeg must link on the target-native
 host. LakePrism uses the PyO3 `abi3-py39` policy, producing one `cp39-abi3`
 wheel for CPython 3.9+. See the repository README for the supported
 manylinux and musllinux (x86_64/aarch64), macOS (x86_64/aarch64), and Windows

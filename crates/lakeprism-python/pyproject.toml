@@ -4,12 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "lakeprism"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Notebook-friendly bindings for governed local LakePrism queries"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
+license = "Apache-2.0 AND LGPL-2.1-or-later"
+license-files = ["LICENSE", "FFMPEG-LICENSE.txt"]
 authors = [{ name = "LakePrism contributors" }]
 keywords = ["arrow", "datafusion", "delta-lake", "lakehouse", "notebook"]
 classifiers = [
@@ -44,4 +44,5 @@ test = ["pytest>=7"]
 [tool.maturin]
 module-name = "lakeprism._lakeprism"
 python-source = "python"
-features = ["flight", "delta-rs", "unity", "whisper-subprocess"]
+features = ["flight", "delta-rs", "unity", "whisper-subprocess", "native-media"]
+include = [{ path = "python/lakeprism/_ffmpeg/**", format = "wheel" }]

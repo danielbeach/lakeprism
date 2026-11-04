@@ -61,15 +61,23 @@ because the extension and optional FFmpeg bindings must link and run on their
 actual target host. The script also rejects a mismatched Python interpreter;
 select one explicitly with `--python` when the default runs under Rosetta.
 The root README documents the native manylinux/musllinux x86_64/aarch64,
-macOS x86_64/aarch64, and Windows x86_64 matrix. Standard portable wheels omit
-`native-media`; build that feature separately only with
-target-matched FFmpeg development libraries.
+macOS x86_64/aarch64, and Windows x86_64 matrix. Published `0.1.0a1` wheels omit
+`native-media`. The `0.1.0a2` candidate builds native FFmpeg from pinned source
+and bundles its five shared libraries, corresponding source archive, notices,
+and build configuration. Building from this checkout requires a native C/Rust
+toolchain, libclang, and NASM on x86, not preinstalled FFmpeg development libraries.
 
 Release smoke tests install each wheel on CPython 3.9, 3.12, and 3.14 and run
 copied tests outside the source package under Python isolated mode. Alpine
-tests do not install PyArrow; PyArrow-dependent notebook extras on musllinux
-are not validated. Source installations enable the same default Maturin
-features as portable wheels.
+tests do not install PyArrow but still exercise native video/audio decoding.
+PyArrow-dependent notebook extras on musllinux are not validated. Source
+installations enable native media and require a compatible FFmpeg development
+environment. Installed wheel tests hide the FFmpeg build prefix and clear
+library-path overrides so unbundled dependencies cannot mask a broken wheel.
+
+See [the real local workflow](../examples/local_transcription/README.md) for
+native audio normalization, actual offline CPU Whisper inference, SQL search,
+and Parquet persistence/reload using the candidate wheel.
 
 ## Equivalent workflows
 

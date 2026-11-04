@@ -4,6 +4,18 @@ set -euo pipefail
 source="${1:?Supply a wheel directory or an exact package requirement}"
 index="${2:-}"
 versions="${LAKEPRISM_PYTHONS:-3.9 3.12 3.14}"
+export LAKEPRISM_NATIVE_MEDIA=1
+unset FFMPEG_DIR PKG_CONFIG_PATH LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH
+build_prefix="$PWD/target/wheel-ffmpeg"
+hidden_prefix="$PWD/target/wheel-ffmpeg-build-only"
+if [[ -d "$build_prefix" ]]; then
+  [[ ! -e "$hidden_prefix" ]] || {
+    printf 'error: FFmpeg isolation directory already exists: %s\n' "$hidden_prefix" >&2
+    exit 1
+  }
+  mv "$build_prefix" "$hidden_prefix"
+  trap 'mv "$hidden_prefix" "$build_prefix"' EXIT
+fi
 
 if [[ -z "$index" ]]; then
   shopt -s nullglob

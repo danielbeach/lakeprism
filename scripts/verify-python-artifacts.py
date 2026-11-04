@@ -22,6 +22,47 @@ PLATFORMS = {
     "win_amd64",
 }
 
+FFMPEG_VERSION = "9.0.2"
+FFMPEG_SHA256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e"
+
+
+def verify_ffmpeg_bundle(archive):
+    prefix = "lakeprism/_ffmpeg/"
+    names = archive.namelist()
+    required = {
+        prefix + "COPYING.LGPLv2.1",
+        prefix + "FFMPEG-LICENSE.md",
+        prefix + "NOTICE.txt",
+        prefix + "BUILD.json",
+        prefix + f"ffmpeg-{FFMPEG_VERSION}.tar.xz",
+    }
+    if not required <= set(names):
+        raise ValueError("wheel is missing FFmpeg corresponding source/licenses/build details")
+    build = json.loads(archive.read(prefix + "BUILD.json"))
+    if (build["version"], build["sha256"], build["source_changes"]) != (
+        FFMPEG_VERSION, FFMPEG_SHA256, "none"
+    ):
+        raise ValueError("wheel FFmpeg source identity differs from the pinned build")
+    flags = set(build["configure"])
+    if not {
+        "--enable-shared", "--disable-static", "--disable-gpl", "--disable-nonfree",
+        "--disable-version3", "--disable-autodetect", "--disable-network",
+    } <= flags or flags.intersection({
+        "--enable-gpl", "--enable-nonfree", "--enable-version3", "--enable-static",
+    }):
+        raise ValueError("wheel FFmpeg configuration violates the shared LGPL-only build policy")
+    if hashlib.sha256(
+        archive.read(prefix + f"ffmpeg-{FFMPEG_VERSION}.tar.xz")
+    ).hexdigest() != FFMPEG_SHA256:
+        raise ValueError("wheel FFmpeg corresponding source checksum mismatch")
+    libraries = [
+        Path(name).name.lower() for name in names
+        if name.lower().endswith((".dll", ".dylib")) or ".so." in name.lower()
+    ]
+    for component in ("avcodec", "avformat", "avutil", "swresample", "swscale"):
+        if not any(component in library for library in libraries):
+            raise ValueError(f"wheel lacks bundled FFmpeg shared library: {component}")
+
 
 def verify(directory, version):
     files = sorted(directory.iterdir())
@@ -31,6 +72,8 @@ def verify(directory, version):
         raise ValueError("release must contain exactly seven wheels and one source archive")
     platforms = set()
     for wheel in wheels:
+        if wheel.stat().st_size > 100_000_000:
+            raise ValueError(f"wheel exceeds the conservative PyPI 100 MB size gate: {wheel.name}")
         _, abi_python, abi, platform = wheel.stem.rsplit("-", 3)
         if (abi_python, abi) != ("cp39", "abi3"):
             raise ValueError(f"unexpected wheel ABI: {wheel.name}")
@@ -61,6 +104,12 @@ def verify(directory, version):
                 for name in archive.namelist()
             ):
                 raise ValueError(f"missing license: {wheel.name}")
+            if not any(
+                name.endswith(".dist-info/licenses/FFMPEG-LICENSE.txt")
+                for name in archive.namelist()
+            ):
+                raise ValueError(f"missing FFmpeg license: {wheel.name}")
+            verify_ffmpeg_bundle(archive)
     if platforms != PLATFORMS:
         raise ValueError(f"missing platforms: {PLATFORMS - platforms}")
     with tarfile.open(sources[0]) as archive:

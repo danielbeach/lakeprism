@@ -1,0 +1,29 @@
+The downloaded jfk.wav sample is sourced from ggml-org/whisper.cpp at revision
+482279b8a18855ba741d7b88c30fcb3874691f59, distributed under the following license.
+The recording is a short excerpt of John F. Kennedy's 1961 inaugural address.
+The downloaded Systran/faster-whisper-tiny.en model is an MIT-licensed
+conversion of OpenAI's Whisper tiny.en weights. Its pinned model card provides
+the conversion details; the original weights are copyrighted by OpenAI.
+
+MIT License
+
+Copyright (c) 2023-2026 The ggml authors
+Copyright (c) 2022 OpenAI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

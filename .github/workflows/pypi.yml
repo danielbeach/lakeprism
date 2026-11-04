@@ -23,6 +23,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_INCREMENTAL: "0"
   LAKEPRISM_PYTHONS: "3.9 3.12 3.14"
+  LAKEPRISM_NATIVE_MEDIA: "1"
 
 jobs:
   metadata:
@@ -121,6 +122,40 @@ jobs:
         with:
           python-version: "3.9"
       - uses: astral-sh/setup-uv@v6
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MSYS
+          path-type: inherit
+          install: make nasm diffutils
+      - name: Configure Windows LLVM
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+      - name: Install macOS assembly tools
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install nasm
+      - name: Build FFmpeg on macOS
+        if: runner.os == 'macOS'
+        run: |
+          bash scripts/build-wheel-ffmpeg.sh
+          echo "FFMPEG_DIR=$PWD/target/wheel-ffmpeg" >> "$GITHUB_ENV"
+      - name: Build FFmpeg with the Windows native compiler
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          PYTHON: python
+        run: bash scripts/build-wheel-ffmpeg.sh
+      - name: Set Windows FFmpeg library directory
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "FFMPEG_DIR=$(cygpath -m "$PWD/target/wheel-ffmpeg")" >> "$GITHUB_ENV"
       - name: Build native ABI3 wheel
         uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
         with:
@@ -128,7 +163,20 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.policy }}
           container: ${{ matrix.image }}
-          args: --release --locked --manifest-path crates/lakeprism-python/Cargo.toml --interpreter ${{ runner.os == 'Linux' && 'python3.9' || 'python' }} --out dist/python
+          before-script-linux: |
+            if command -v apk >/dev/null; then
+              apk add --no-cache nasm clang-dev pkgconf
+            else
+              yum install -y nasm clang-devel pkgconf-pkg-config
+            fi
+            bash scripts/build-wheel-ffmpeg.sh
+            export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
+            export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
+            export LD_LIBRARY_PATH="$FFMPEG_DIR/lib"
+          args: --release --strip --locked --manifest-path crates/lakeprism-python/Cargo.toml --interpreter ${{ runner.os == 'Linux' && 'python3.9' || 'python' }} --out dist/unrepaired
+      - name: Bundle platform shared-library dependencies
+        shell: bash
+        run: bash scripts/repair-python-wheel.sh dist/unrepaired dist/python
       - name: Test installed Linux wheel in its native libc container
         if: runner.os == 'Linux'
         env:
@@ -160,6 +208,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Build and install source distribution
         run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm pkg-config clang libclang-dev
+          bash scripts/build-wheel-ffmpeg.sh
+          export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
+          export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
+          export LD_LIBRARY_PATH="$FFMPEG_DIR/lib"
           uv tool run --from maturin==1.10.2 maturin sdist \
             --manifest-path crates/lakeprism-python/Cargo.toml --out dist/python
           uv venv --python 3.12 .sdist-smoke-venv
@@ -173,6 +227,32 @@ jobs:
           name: source-distribution
           path: dist/python/*.tar.gz
           if-no-files-found: error
+
+  local-workflow:
+    needs: wheel
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-manylinux-x86_64
+          path: dist/python
+      - uses: astral-sh/setup-uv@v6
+      - name: Run the real offline CPU transcription and Parquet workflow
+        run: |
+          uv venv --python 3.12 .local-workflow-venv
+          uv pip install --python .local-workflow-venv/bin/python dist/python/*.whl \
+            -r examples/local_transcription/requirements.txt
+          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+            --prepare --work-dir target/local-transcription
+          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+            --work-dir target/local-transcription --check-sample
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-workflow-results
+          path: |
+            target/local-transcription/transcripts.parquet
+            target/local-transcription/results.json
 
   artifacts:
     needs: [metadata, wheel, source]
@@ -193,6 +273,8 @@ jobs:
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
+          uv run --no-project --python 3.12 --with pytest python -m pytest -q \
+            scripts/test_verify_python_artifacts.py
           uv run --no-project --python 3.12 scripts/verify-python-artifacts.py dist/python "$VERSION"
           uv tool run --from twine==6.1.0 twine check dist/python/*
       - uses: actions/upload-artifact@v4
@@ -203,7 +285,7 @@ jobs:
 
   testpypi:
     if: github.event_name == 'push' || inputs.publish
-    needs: [validation, artifacts]
+    needs: [validation, artifacts, local-workflow]
     runs-on: ubuntu-24.04
     environment:
       name: testpypi

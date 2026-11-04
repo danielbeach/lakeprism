@@ -1,6 +1,9 @@
+import base64
+import math
 import os
-import subprocess
+import struct
 import sys
+import wave
 
 import pytest
 
@@ -242,20 +245,23 @@ def test_python_native_media_path_decodes_a_real_ffmpeg_fixture(tmp_path):
         pytest.skip("native FFmpeg acceptance is enabled only on a matched CI host")
 
     fixture = tmp_path / "native-acceptance.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=c=black:s=16x16:d=0.1",
-            "-an",
-            str(fixture),
-        ],
-        check=True,
-        capture_output=True,
-    )
+    # Synthetic 16x16 black H.264 clip, generated once with FFmpeg's color source.
+    # Keep runtime acceptance independent of an installed ffmpeg executable.
+    fixture.write_bytes(base64.b64decode(
+        "AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAADRtZGF0AAAADmWIhAv//vau/MsrdH+BAAAAB0Ga"
+        "OxC//uAAAAALQZpPCGTKYQr//sEAAAMQbW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAAAHgAAQAAAQAAAAAAAAAAAAAA"
+        "AAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAl90cmFr"
+        "AAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAAAHgAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA"
+        "AAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAB4AAAAAAABAAAAAAHXbWRpYQAAACBtZGhk"
+        "AAAAAAAAAAAAAAAAAAAyAAAABgBVxAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAB"
+        "gm1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAUJzdGJsAAAA"
+        "vnN0c2QAAAAAAAAAAQAAAK5hdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABDExhdmMgbGli"
+        "eDI2NAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAANGF2Y0MBZAAK/+EAF2dkAAqssj2AiAAAAwAIAAADAZB4kTJAAQAGaOvD"
+        "yyLA/fj4AAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAAAAt1AAAAAAAAABhzdHRzAAAAAAAAAAEAAAADAAACAAAAABRz"
+        "dHNzAAAAAAAAAAEAAAABAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAADAAAAAQAAACBzdHN6AAAAAAAAAAAAAAADAAAAEgAAAAsA"
+        "AAAPAAAAFHN0Y28AAAAAAAAAAQAAADAAAAA9dWR0YQAAADVtZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAA"
+        "AAAAAAAAAAhpbHN0"
+    ))
     rows = lakeprism.MediaSession().video_frames(
         fixture.as_uri(), 0, 100, 50, 2, include_rgb24=False
     ).collect()
@@ -265,6 +271,33 @@ def test_python_native_media_path_decodes_a_real_ffmpeg_fixture(tmp_path):
     assert rows[0]["height"] == "16"
 
 
+def write_stereo_wave(path, sample_rate):
+    samples = (
+        int(10000 * math.sin(2 * math.pi * 1000 * index / sample_rate))
+        for index in range(round(sample_rate * 0.12))
+    )
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(sample_rate)
+        output.writeframes(b"".join(struct.pack("<hh", sample, sample) for sample in samples))
+
+
+def test_python_native_audio_decodes_without_pyarrow_or_ffmpeg_executable(tmp_path):
+    if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
+        pytest.skip("native FFmpeg acceptance is enabled only on a matched CI host")
+    fixture = tmp_path / "audio.wav"
+    write_stereo_wave(fixture, 44100)
+    rows = lakeprism.MediaSession().audio_segments(
+        fixture.as_uri(), 0, 120, 40, 3, include_payload=False
+    ).collect()
+    assert len(rows) == 3
+    assert all(row["sample_rate_hz"] == "16000" and row["channel_count"] == "1" for row in rows)
+    assert [(row["start_millis"], row["end_millis"]) for row in rows] == [
+        ("0", "40"), ("40", "80"), ("80", "120")
+    ]
+
+
 @pytest.mark.parametrize("sample_rate", [8000, 44100, 48000])
 def test_python_native_audio_preserves_resampled_tail_and_time_bounds(tmp_path, sample_rate):
     if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
@@ -272,15 +305,7 @@ def test_python_native_audio_preserves_resampled_tail_and_time_bounds(tmp_path, 
 
     pytest.importorskip("pyarrow")
     fixture = tmp_path / "native-audio.wav"
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-f", "lavfi", "-i",
-            f"sine=frequency=1000:sample_rate={sample_rate}:duration=0.12",
-            "-ac", "2", str(fixture),
-        ],
-        check=True,
-        capture_output=True,
-    )
+    write_stereo_wave(fixture, sample_rate)
     reader = lakeprism.MediaSession().audio_segments(
         fixture.as_uri(), 0, 120, 40, 3, include_payload=True
     ).to_pyarrow()

@@ -36,7 +36,13 @@ jobs:
         with:
           python-version: "3.11"
           architecture: "x64"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev libswresample-dev pkg-config
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg nasm clang libclang-dev pkg-config
+      - name: Build the release FFmpeg runtime and source notices
+        run: |
+          bash scripts/build-wheel-ffmpeg.sh
+          echo "FFMPEG_DIR=$PWD/target/wheel-ffmpeg" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$PWD/target/wheel-ffmpeg/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/target/wheel-ffmpeg/lib" >> "$GITHUB_ENV"
       - run: cargo test -p lakeprism-media --features native-media
       - run: cargo test -p lakeprism-datafusion --features native-media
       - run: cargo test -p lakeprism-flight --features native-media

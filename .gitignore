@@ -21,6 +21,8 @@ venv/
 # Maturin and PyPI artifacts
 *.whl
 *.tar.gz
+/crates/lakeprism-python/python/lakeprism/_ffmpeg/
+/crates/lakeprism-python/FFMPEG-LICENSE.txt
 
 # LakePrism local runtime state
 /.lakeprism/

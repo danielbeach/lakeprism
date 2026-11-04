@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build one target-matched, base LakePrism abi3 wheel. See README.md for the CI matrix.
+# Build one target-matched LakePrism abi3 wheel. See README.md for the CI matrix.
 set -euo pipefail
 
 usage() {
@@ -17,9 +17,9 @@ Options:
   --manylinux POLICY    Maturin policy (for example 2_28 or off; default: off).
   --python PATH         Build interpreter (default: python3).
   --features FEATURES   Comma-separated Python crate features
-                        (default: flight,delta-rs,unity,whisper-subprocess).
-  --native-media        Add the native-media feature. Requires target-matched
-                        FFmpeg development libraries; never cross-compile it.
+                        (default: flight,delta-rs,unity,whisper-subprocess,native-media).
+  --native-media        Native media is included by default. FFmpeg is built
+                        from the pinned source and bundled; never cross-compile it.
   --out DIRECTORY       Wheel output directory (default: dist/python).
   -h, --help            Show this help.
 
@@ -39,8 +39,7 @@ platform="native"
 target=""
 manylinux="off"
 python_bin="python3"
-features="flight,delta-rs,unity,whisper-subprocess"
-native_media=0
+features="flight,delta-rs,unity,whisper-subprocess,native-media"
 out="dist/python"
 
 while (($#)); do
@@ -71,7 +70,6 @@ while (($#)); do
       shift 2
       ;;
     --native-media)
-      native_media=1
       shift
       ;;
     --out)
@@ -147,11 +145,15 @@ case "$host_target:$python_machine" in
     ;;
 esac
 
-if ((native_media)); then
-  features="${features:+$features,}native-media"
-fi
-
 mkdir -p "$out"
+raw="target/unrepaired-$platform"
+PYTHON="$python_bin" bash scripts/build-wheel-ffmpeg.sh
+export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
+export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
+export LD_LIBRARY_PATH="$FFMPEG_DIR/lib"
+if [[ "$host_target" == *windows* ]]; then
+  export FFMPEG_DIR="$(cygpath -m "$FFMPEG_DIR")"
+fi
 
 maturin_args=(
   build
@@ -161,7 +163,8 @@ maturin_args=(
   --target "$target"
   --interpreter "$python_bin"
   --features "$features"
-  --out "$out"
+  --strip
+  --out "$raw"
 )
 if [[ "$manylinux" != "off" ]]; then
   maturin_args+=(--manylinux "$manylinux")
@@ -170,3 +173,4 @@ fi
 printf 'Building target-matched %s wheel for %s (features: %s)\n' \
   "$platform" "$target" "$features"
 uv tool run --from 'maturin==1.10.2' maturin "${maturin_args[@]}"
+bash scripts/repair-python-wheel.sh "$raw" "$out"

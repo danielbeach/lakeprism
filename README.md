@@ -9,6 +9,10 @@ credentials, and data locality must remain explicit.
 is published on PyPI with seven platform wheels and a source distribution.
 See [Release readiness](#release-readiness) for validated capabilities and limits.
 
+**Next candidate: `0.1.0a2`.** The checkout adds bundled native FFmpeg decoding
+and a [real local speech-to-SQL workflow](examples/local_transcription/README.md).
+This candidate is not yet published; the installation below selects the existing release.
+
 ## Install
 
 Install the explicit alpha version:
@@ -30,9 +34,11 @@ The wheel uses the CPython `abi3-py39` ABI and supports Python 3.9 or newer.
 For notebook helpers, install `lakeprism[notebook]==0.1.0a1`.
 Those helpers load PyArrow, pandas, IPython, and tqdm only when called.
 
-The standard wheel includes the local SQL, Arrow, catalog, Delta, Unity, and
-Flight bindings. It deliberately does **not** bundle FFmpeg, a transcription
-model, an embedding model, cloud credentials, or a cloud credential broker.
+The published `0.1.0a1` wheel includes local SQL, Arrow, catalog, Delta, Unity,
+and Flight bindings, but no native FFmpeg runtime. The `0.1.0a2` candidate
+bundles decode-only FFmpeg shared libraries, LGPL notices, build details, and
+complete corresponding source. Neither version bundles speech/embedding models,
+cloud credentials, or a cloud credential broker.
 
 ## Start with Python
 
@@ -168,10 +174,12 @@ for row in sections.collect():
     print(row["text"])
 ```
 
-Native decoding is intentionally separate from the portable Python wheel:
+Published `0.1.0a1` wheels lack native decoding. Candidate wheels include it.
+To build a candidate locally, use a matching Rust/C toolchain (NASM on x86)
+and libclang; the builder compiles and bundles its own pinned FFmpeg:
 
 ```bash
-# Build only on the host that supplies compatible FFmpeg development libraries.
+# Build only on the matching native host; no system FFmpeg is bundled.
 bash scripts/build-python-wheels.sh \
   --platform native --native-media --out dist/python
 ```
@@ -287,6 +295,11 @@ All release gates passed for `0.1.0a1` in
 including seven-platform TestPyPI installation tests and production artifact
 hash and installation checks.
 
+The `0.1.0a2` candidate extends that matrix with installed native decoding,
+build-library isolation, FFmpeg source/license/configuration verification,
+and an actual offline CPU speech-model workflow. It requires new runner proof
+before a new publication; `0.1.0a1` files remain immutable.
+
 Publishing requires all of these gates in the same workflow run:
 
 1. Reusable core/native CI, including actual FFmpeg/PyO3 runtime acceptance.
@@ -294,13 +307,15 @@ Publishing requires all of these gates in the same workflow run:
    platform, plus an installed source-distribution test. Tests run outside the
    source package so a development extension cannot mask a broken wheel.
 3. Exactly seven ABI3 wheels and one source archive with matching versions,
-   license files, and valid distribution metadata.
+   license files, valid metadata, corresponding FFmpeg source and all five
+   dynamically linked FFmpeg libraries.
 4. OIDC publication to TestPyPI, hash verification of all uploaded files,
    and installed TestPyPI wheel tests on all seven platforms.
 5. Publication of those identical files to production PyPI, followed by
    production hash and installation checks.
 
-Alpine tests cover the portable core without installing PyArrow, whose
+The candidate also runs the real model example before publication.
+Alpine tests cover native video/audio decoding without installing PyArrow, whose
 musllinux distribution is outside this release's control. PyArrow-dependent
 notebook extras on Alpine are not a validated capability.
 
@@ -318,8 +333,12 @@ Live Databricks/Unity data-plane acceptance remains an opt-in requirement
 before claiming validated production cloud support. It is not a prerequisite
 for this explicitly local-first alpha.
 
-The workflow publishes only portable base wheels. FFmpeg-enabled wheels need a
-separate dependency-bundling and target-runtime policy before public release.
+Candidate FFmpeg builds disable GPL/nonfree/version3 components, networking,
+autodetected dependencies, encoders, and unused formats. They support MP4/MOV,
+Matroska/WebM, and WAV with H.264, HEVC, VP9, MPEG-4, MJPEG, AAC, MP3, Opus,
+Vorbis, FLAC and PCM decoders; AV1 is not included in this minimal bundle.
+Other formats/codecs require a custom native build/profile. Codec patent
+obligations remain separate from the supplied LGPL redistribution materials.
 The architecture spans several future releases; see
 [plan versus alpha](docs/ACCEPTANCE_MATRIX.md#architecture-plan-versus-the-010-alpha)
 for implemented boundaries and unmet roadmap exit criteria.
@@ -335,6 +354,10 @@ cargo test
 Python binding tests run on a target-matched native host:
 
 ```bash
+bash scripts/build-wheel-ffmpeg.sh
+export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
+export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
+export LD_LIBRARY_PATH="$FFMPEG_DIR/lib"
 python -m venv .native-venv
 .native-venv/bin/python -m pip install maturin==1.10.2 pytest pyarrow
 VIRTUAL_ENV="$PWD/.native-venv" .native-venv/bin/maturin develop \

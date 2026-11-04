@@ -35,8 +35,12 @@ The `native-runtime` CI job runs actual FFmpeg and Maturin/PyO3 execution in
 an isolated Python environment. CI and release Rust jobs also run optional
 S3/Delta/Iceberg REST/Unity tests and bounded subprocess-provider fixtures
 rather than checking only default features.
-The PyPI matrix runs portable binding tests after installing each wheel;
-native-media tests are intentionally skipped in portable wheels.
+The published `0.1.0a1` matrix tested portable bindings without native decode.
+The `0.1.0a2` candidate requires real native video/audio tests on every installed
+wheel, with its FFmpeg build prefix hidden. Python fixtures do not invoke a
+system FFmpeg executable. Alpine exercises native decoding without PyArrow.
+An additional CPU workflow runs a pinned real speech model on an openly
+licensed recording, performs SQL search, and checks persisted Parquet results.
 
 Local native validation also works when the Rust compiler, FFmpeg libraries,
 and Python interpreter share the same architecture. On macOS with both Intel
@@ -46,6 +50,9 @@ directory and executable path explicitly. For an arm64 installation:
 ```bash
 export PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig
 export PATH=/opt/homebrew/bin:$PATH
+bash scripts/build-wheel-ffmpeg.sh
+export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
+export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
 python3 -m venv .native-venv
 .native-venv/bin/python -m pip install maturin==1.10.2 pytest pyarrow
 VIRTUAL_ENV="$PWD/.native-venv" .native-venv/bin/maturin develop \
@@ -101,7 +108,10 @@ complete eight-file release by SHA-256, and tests installed TestPyPI wheels on
 every platform. Production receives exactly those same files and is checked
 again after upload. The `testpypi` and `pypi` GitHub environments restrict
 deployment to `main` and matching `v*` tags; each index has a separate OIDC
-trusted publisher. Public FFmpeg-enabled wheels remain outside this matrix.
+trusted publisher. The next `0.1.0a2` candidate adds bundled native FFmpeg to
+this matrix; publication must wait for new hosted proof. Wheel checks require
+all five shared libraries, the exact corresponding source archive, LGPL
+notices, and a configuration disabling GPL/nonfree/version3 components.
 
 Protected non-production cloud/data-plane acceptance is still required before
 advertising validated production cloud support, but does not gate the
