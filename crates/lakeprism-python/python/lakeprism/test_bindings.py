@@ -405,7 +405,7 @@ def test_recording_dataset_folder_reuse_refresh_and_partial_failure(tmp_path):
             )
 
     model = FixtureModel()
-    dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset [literal]")
     assert dataset.ingest(recordings, model=model)[0]["status"] == "written"
     assert dataset.ingest(recordings, model=model)[0]["status"] == "reused"
     assert len(calls.read_text().splitlines()) == 1

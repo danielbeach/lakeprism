@@ -213,12 +213,11 @@ impl RecordingDataset {
                 .recordings
                 .values()
                 .map(|snapshot| {
-                    self.root
-                        .join(&snapshot.file)
-                        .to_string_lossy()
-                        .into_owned()
+                    url::Url::from_file_path(self.root.join(&snapshot.file))
+                        .map(String::from)
+                        .map_err(|_| RecordingError::UnsafePath)
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, _>>()?;
             let context = SessionContext::new();
             let provider = context
                 .read_parquet(paths, ParquetReadOptions::default())
@@ -420,7 +419,7 @@ mod tests {
         }
 
         fn dataset(&self) -> RecordingDataset {
-            RecordingDataset::open(self.0.join("dataset")).unwrap()
+            RecordingDataset::open(self.0.join("dataset [literal]")).unwrap()
         }
     }
 
@@ -558,7 +557,7 @@ mod tests {
 
     impl Fixture {
         fn dataset_result(&self) -> Result<RecordingDataset, RecordingError> {
-            RecordingDataset::open(self.0.join("dataset"))
+            RecordingDataset::open(self.0.join("dataset [literal]"))
         }
     }
 }
