@@ -5,20 +5,20 @@ media, documents, Parquet, and derived features through SQL and Apache Arrow.
 It is designed for notebooks and small governed services where execution,
 credentials, and data locality must remain explicit.
 
-**Status: alpha.** Version [`0.1.0a1`](https://pypi.org/project/lakeprism/0.1.0a1/)
+**Status: alpha.** Version [`0.1.0a2`](https://pypi.org/project/lakeprism/0.1.0a2/)
 is published on PyPI with seven platform wheels and a source distribution.
 See [Release readiness](#release-readiness) for validated capabilities and limits.
 
-**Next candidate: `0.1.0a2`.** The checkout adds bundled native FFmpeg decoding
-and a [real local speech-to-SQL workflow](examples/local_transcription/README.md).
-This candidate is not yet published; the installation below selects the existing release.
+**New in `0.1.0a2`:** bundled native FFmpeg decoding and an installed-package
+[local recording-to-SQL workflow](examples/local_transcription/README.md),
+including persistent transcripts, unchanged reuse, and explicit model preparation.
 
 ## Install
 
 Install the explicit alpha version:
 
 ```bash
-python -m pip install lakeprism==0.1.0a1
+python -m pip install lakeprism==0.1.0a2
 ```
 
 Or build and install a wheel from a checkout:
@@ -31,23 +31,23 @@ python -m pip install dist/python/lakeprism-*.whl
 ```
 
 The wheel uses the CPython `abi3-py39` ABI and supports Python 3.9 or newer.
-For notebook helpers, install `lakeprism[notebook]==0.1.0a1`.
+For notebook helpers, install `lakeprism[notebook]==0.1.0a2`.
 Those helpers load PyArrow, pandas, IPython, and tqdm only when called.
 
 The published `0.1.0a1` wheel includes local SQL, Arrow, catalog, Delta, Unity,
-and Flight bindings, but no native FFmpeg runtime. The `0.1.0a2` candidate
+and Flight bindings, but no native FFmpeg runtime. The `0.1.0a2` release
 bundles decode-only FFmpeg shared libraries, LGPL notices, build details, and
 complete corresponding source. Neither version bundles speech/embedding models,
 cloud credentials, or a cloud credential broker.
 
 ## Local recordings to a searchable dataset
 
-The checkout's `0.1.0a2` candidate provides an installed-package workflow, not
-just a repository script. Use Python 3.12 and install the matching candidate
-wheel with its `speech` extra; these APIs are not in published `0.1.0a1`:
+The published `0.1.0a2` release provides an installed-package workflow, not
+just a repository script. Use Python 3.12 and install its `speech` extra;
+these APIs are not in `0.1.0a1`:
 
 ```bash
-python -m pip install --find-links /path/to/downloaded/wheels "lakeprism[speech]==0.1.0a2"
+python -m pip install "lakeprism[speech]==0.1.0a2"
 ```
 
 ```python
@@ -229,8 +229,8 @@ for row in sections.collect():
     print(row["text"])
 ```
 
-Published `0.1.0a1` wheels lack native decoding. Candidate wheels include it.
-To build a candidate locally, use a matching Rust/C toolchain (NASM on x86)
+Published `0.1.0a1` wheels lack native decoding; `0.1.0a2` wheels include it.
+To build locally, use a matching Rust/C toolchain (NASM on x86)
 and libclang; the builder compiles and bundles its own pinned FFmpeg:
 
 ```bash
@@ -340,7 +340,7 @@ object storage, custom media/model providers, or worker execution.
 
 ## Release readiness
 
-The first release is the explicit prerelease **`0.1.0a1`**. The PyPI workflow
+The current release is the explicit prerelease **`0.1.0a2`**. The PyPI workflow
 builds seven native-target wheel variants: manylinux x86_64/arm64, musllinux
 x86_64/arm64 (Alpine), macOS Intel/Apple Silicon, and Windows x86_64.
 The ABI policy targets ordinary GIL-enabled CPython 3.9+; free-threaded Python,
@@ -351,12 +351,13 @@ All release gates passed for `0.1.0a1` in
 including seven-platform TestPyPI installation tests and production artifact
 hash and installation checks.
 
-The `0.1.0a2` candidate extends that matrix with installed native decoding,
+Release `0.1.0a2` extends that matrix with installed native decoding,
 build-library isolation, FFmpeg source/license/configuration verification,
-and an actual offline CPU speech-model workflow. The native-bundle baseline
-passed [all seven targets](https://github.com/danielbeach/lakeprism/actions/runs/41927164614).
-The new persistent recording workflow requires another complete runner pass
-before publication; `0.1.0a1` files remain immutable.
+and an actual offline CPU speech-model workflow. Its
+[successful publication run](https://github.com/danielbeach/lakeprism/actions/runs/42093023166)
+passed all seven wheel targets, source installation, real-model recording
+acceptance, TestPyPI installation on every platform, and production artifact
+hash/installation verification. Both published versions' files remain immutable.
 
 Publishing requires all of these gates in the same workflow run:
 
@@ -372,7 +373,7 @@ Publishing requires all of these gates in the same workflow run:
 5. Publication of those identical files to production PyPI, followed by
    production hash and installation checks.
 
-The candidate also runs the real model example before publication.
+The workflow also runs the real model example before publication.
 Alpine tests cover native video/audio decoding without installing PyArrow, whose
 musllinux distribution is outside this release's control. PyArrow-dependent
 notebook extras on Alpine are not a validated capability.
@@ -391,7 +392,7 @@ Live Databricks/Unity data-plane acceptance remains an opt-in requirement
 before claiming validated production cloud support. It is not a prerequisite
 for this explicitly local-first alpha.
 
-Candidate FFmpeg builds disable GPL/nonfree/version3 components, networking,
+Release FFmpeg builds disable GPL/nonfree/version3 components, networking,
 autodetected dependencies, encoders, and unused formats. They support MP4/MOV,
 Matroska/WebM, and WAV with H.264, HEVC, VP9, MPEG-4, MJPEG, AAC, MP3, Opus,
 Vorbis, FLAC and PCM decoders; AV1 is not included in this minimal bundle.
@@ -430,7 +431,7 @@ opt-in cloud acceptance boundary.
 
 ## License
 
-LakePrism source is Apache-2.0. See [LICENSE](LICENSE). Native candidate wheels
+LakePrism source is Apache-2.0. See [LICENSE](LICENSE). Native wheels
 also redistribute FFmpeg under LGPL-2.1-or-later, with its source and notices
 inside the wheel. Explicitly downloaded model weights have separate MIT
 terms and attribution beside the model files.

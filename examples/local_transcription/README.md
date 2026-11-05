@@ -10,16 +10,14 @@ This example runs a real speech model, not a fixture provider:
 
 ## Install
 
-Use Python 3.12 and a **0.1.0a2 candidate wheel** from the repository's PyPI
-build workflow. The published 0.1.0a1 wheels do not contain native decoding.
-The candidate is not published automatically by a build-only run.
+Use Python 3.12 and the published **0.1.0a2** release from PyPI.
+The older 0.1.0a1 wheels do not contain native decoding.
 
-From a checkout, after downloading the wheel for your platform:
+To run this example from a checkout:
 
 ```bash
 uv venv --python 3.12 .demo-venv
-uv pip install --python .demo-venv/bin/python --find-links /path/to/downloaded/wheels \
-  "lakeprism[speech]==0.1.0a2"
+uv pip install --python .demo-venv/bin/python "lakeprism[speech]==0.1.0a2"
 
 # The only network/model preparation step; about 76 MB of weights.
 .demo-venv/bin/python examples/local_transcription/demo.py --prepare
@@ -29,9 +27,9 @@ uv pip install --python .demo-venv/bin/python --find-links /path/to/downloaded/w
 ```
 
 On Windows, use `.demo-venv\Scripts\python.exe` instead of
-`.demo-venv/bin/python`, and supply the directory containing the matching wheel.
+`.demo-venv/bin/python`.
 Neither platform needs a system `ffmpeg` executable or a Rust compiler when
-using the candidate wheel.
+using the published wheel.
 
 `--prepare` downloads a pinned, checksummed recording and a pinned,
 checksummed model. It copies attribution/license notices beside the assets.
@@ -40,10 +38,10 @@ mode enabled. No paid API, credentials, GPU, or automatic model download is used
 
 ## Use the installed package without this repository
 
-Install the matching candidate wheel with its `speech` extra:
+Install the published wheel with its `speech` extra:
 
 ```bash
-python -m pip install --find-links /path/to/downloaded/wheels "lakeprism[speech]==0.1.0a2"
+python -m pip install "lakeprism[speech]==0.1.0a2"
 ```
 
 ```python

@@ -2,8 +2,8 @@
 
 `lakeprism` is the Maturin/PyO3 notebook binding for the local LakePrism
 session. This package version is `0.1.0a2`; its native wheels add bundled media
-decoding and a persistent recording-to-SQL workflow. See the repository's
-release status before installing from PyPI:
+decoding and a persistent recording-to-SQL workflow. Install the published
+alpha from PyPI:
 
 ```bash
 python -m pip install lakeprism==0.1.0a2
@@ -19,7 +19,7 @@ pip install dist/python/lakeprism-*.whl
 For notebook display helpers install `lakeprism[notebook]`. They import
 PyArrow, pandas, IPython, and tqdm only when called.
 
-Published `0.1.0a1` wheels omit native media decoding. The next candidate
+Published `0.1.0a1` wheels omit native media decoding. Release `0.1.0a2`
 bundles native FFmpeg shared libraries, LGPL notices, build instructions and
 complete corresponding source, without requiring system FFmpeg at runtime.
 Models remain external. See the repository's
@@ -77,7 +77,7 @@ traits rather than Python object wrappers.
 
 Python wheels include `WhisperSubprocessConfig` and
 `MediaSession.with_transcription_subprocess`, but deliberately do **not**
-include a model runtime or model artifact. Candidate wheels include a Python
+include a model runtime or model artifact. Release `0.1.0a2` wheels include a Python
 adapter for the optional `speech` extra and the `RecordingDataset` workflow;
 `prepare_speech_model(path)` explicitly downloads the pinned English model,
 then `SpeechModel(path)` configures offline CPU inference. `RecordingDataset`

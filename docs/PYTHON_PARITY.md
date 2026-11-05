@@ -63,7 +63,7 @@ actual target host. The script also rejects a mismatched Python interpreter;
 select one explicitly with `--python` when the default runs under Rosetta.
 The root README documents the native manylinux/musllinux x86_64/aarch64,
 macOS x86_64/aarch64, and Windows x86_64 matrix. Published `0.1.0a1` wheels omit
-`native-media`. The `0.1.0a2` candidate builds native FFmpeg from pinned source
+`native-media`. Release `0.1.0a2` builds native FFmpeg from pinned source
 and bundles its five shared libraries, corresponding source archive, notices,
 and build configuration. Building from this checkout requires a native C/Rust
 toolchain, libclang, and NASM on x86, not preinstalled FFmpeg development libraries.
@@ -78,7 +78,7 @@ library-path overrides so unbundled dependencies cannot mask a broken wheel.
 
 See [the real local workflow](../examples/local_transcription/README.md) for
 native audio normalization, actual offline CPU Whisper inference, SQL search,
-and Parquet persistence/reload using the candidate wheel. The example uses the
+and Parquet persistence/reload using the published `0.1.0a2` wheel. The example uses the
 installed public recording API, checks unchanged-file reuse, and also runs a
 recording longer than 60 seconds across multiple inference windows.
 

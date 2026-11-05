@@ -37,7 +37,7 @@ an isolated Python environment. CI and release Rust jobs also run optional
 S3/Delta/Iceberg REST/Unity tests and bounded subprocess-provider fixtures
 rather than checking only default features.
 The published `0.1.0a1` matrix tested portable bindings without native decode.
-The `0.1.0a2` candidate requires real native video/audio tests on every installed
+Release `0.1.0a2` passed real native video/audio tests on every installed
 wheel, with its FFmpeg build prefix hidden. Python fixtures do not invoke a
 system FFmpeg executable. Alpine exercises native decoding without PyArrow.
 An additional CPU workflow runs a pinned real speech model on an openly
@@ -96,7 +96,7 @@ searchable dataset through the installed Python package. Cloud integrations,
 distributed workers, production remote Flight, OCR, diarization and scene
 detection are not prerequisites for this product contract.
 
-The candidate now supplies file/folder ingestion, an optional packaged English
+Release `0.1.0a2` supplies file/folder ingestion, an optional packaged English
 CPU speech adapter, explicit model preparation, bounded 30-second decode
 windows, immutable per-recording Parquet, atomic manifest publication,
 unchanged reuse, content/model/operator/parameter invalidation, and reopening
@@ -132,8 +132,8 @@ No general avoided-byte performance guarantee is implied.
 
 ### Release gates outside local validation
 
-Release `0.1.0a1` passed these hosted gates and is published on PyPI.
-[Publication evidence](https://github.com/danielbeach/lakeprism/actions/runs/41513596139)
+Release `0.1.0a2` passed these hosted gates and is published on PyPI.
+[Publication evidence](https://github.com/danielbeach/lakeprism/actions/runs/42093023166)
 covers all seven wheel platforms, the source distribution, TestPyPI rehearsal,
 and production artifact hash and installation checks.
 
@@ -150,8 +150,8 @@ complete eight-file release by SHA-256, and tests installed TestPyPI wheels on
 every platform. Production receives exactly those same files and is checked
 again after upload. The `testpypi` and `pypi` GitHub environments restrict
 deployment to `main` and matching `v*` tags; each index has a separate OIDC
-trusted publisher. The next `0.1.0a2` candidate adds bundled native FFmpeg to
-this matrix; publication must wait for new hosted proof. Wheel checks require
+trusted publisher. Release `0.1.0a2` adds bundled native FFmpeg and the persistent
+recording workflow to this matrix; every new version must repeat these gates. Wheel checks require
 all five shared libraries, the exact corresponding source archive, LGPL
 notices, and a configuration disabling GPL/nonfree/version3 components.
 
