@@ -50,8 +50,8 @@ def transcribe(input_path, model_artifact):
         )
         for segment in segments:
             text = segment.text.strip()
-            first = start + round(segment.start * 1_000)
-            last = min(start + round(segment.end * 1_000), row["end_millis"])
+            first = row["start_millis"] + round(segment.start * 1_000)
+            last = min(row["start_millis"] + round(segment.end * 1_000), row["end_millis"])
             if not text or last <= first:
                 raise ValueError("model returned empty text or invalid timestamps")
             if len(result) >= MAX_SEGMENTS:

@@ -277,20 +277,15 @@ pub fn decode_audio_segments(
     let output_format = util::format::Sample::F32(util::format::sample::Type::Packed);
     let mut resampler = None;
     let mut decoded = frame::Audio::empty();
-    let mut output_end_millis = 0;
+    let mut output_end_sample = 0;
     let chunk_samples = usize::try_from(
         u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
             .saturating_mul(segment_millis)
             .div_ceil(1_000),
     )
     .unwrap_or(usize::MAX);
-    let mut output = AudioChunkAssembler::new(
-        start_millis,
-        end_millis,
-        segment_millis,
-        chunk_samples.max(1),
-        max_segments,
-    );
+    let mut output =
+        AudioChunkAssembler::new(start_millis, end_millis, chunk_samples.max(1), max_segments);
 
     for (packet_stream, packet) in input.packets() {
         if packet_stream.index() != stream_index {
@@ -298,11 +293,12 @@ pub fn decode_audio_segments(
         }
         decoder.send_packet(&packet)?;
         while decoder.receive_frame(&mut decoded).is_ok() {
-            let frame_start = audio_frame_timestamp_millis(&decoded, time_base, resampler.as_ref());
+            let frame_start =
+                audio_frame_timestamp_samples(&decoded, time_base, resampler.as_ref())
+                    .unwrap_or(output_end_sample);
             let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
             output.push(frame_start, converted.plane::<f32>(0));
-            output_end_millis = frame_start
-                + converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+            output_end_sample = frame_start.saturating_add(converted.samples() as i64);
             if output.is_full() {
                 return Ok(output.finish());
             }
@@ -310,11 +306,11 @@ pub fn decode_audio_segments(
     }
     decoder.send_eof()?;
     while decoder.receive_frame(&mut decoded).is_ok() {
-        let frame_start = audio_frame_timestamp_millis(&decoded, time_base, resampler.as_ref());
+        let frame_start = audio_frame_timestamp_samples(&decoded, time_base, resampler.as_ref())
+            .unwrap_or(output_end_sample);
         let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
         output.push(frame_start, converted.plane::<f32>(0));
-        output_end_millis = frame_start
-            + converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+        output_end_sample = frame_start.saturating_add(converted.samples() as i64);
         if output.is_full() {
             return Ok(output.finish());
         }
@@ -324,9 +320,8 @@ pub fn decode_audio_segments(
             let mut converted =
                 resampled_audio_frame(0, NORMALIZED_AUDIO_SAMPLE_RATE_HZ, output_format);
             let delay = resampler.flush(&mut converted)?;
-            output.push(output_end_millis, converted.plane::<f32>(0));
-            output_end_millis +=
-                converted.samples() as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+            output.push(output_end_sample, converted.plane::<f32>(0));
+            output_end_sample = output_end_sample.saturating_add(converted.samples() as i64);
             if delay.is_none() || converted.samples() == 0 || output.is_full() {
                 break;
             }
@@ -381,19 +376,24 @@ fn resampled_audio_frame(
 }
 
 #[cfg(feature = "native-media")]
-fn audio_frame_timestamp_millis(
+fn audio_frame_timestamp_samples(
     decoded: &ffmpeg_next::frame::Audio,
     time_base: ffmpeg_next::Rational,
     resampler: Option<&ffmpeg_next::software::resampling::Context>,
-) -> u64 {
-    let delay_millis = resampler
+) -> Option<i64> {
+    let timestamp = decoded.timestamp()?;
+    let denominator = time_base.denominator();
+    if denominator <= 0 {
+        return None;
+    }
+    let delay_samples = resampler
         .and_then(|resampler| resampler.delay())
-        .map_or(0, |delay| {
-            delay.output as u64 * 1_000 / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
-        });
-    frame_timestamp_millis(decoded.timestamp(), time_base)
-        .unwrap_or(0)
-        .saturating_sub(delay_millis)
+        .map_or(0, |delay| delay.output);
+    let sample = i128::from(timestamp)
+        * i128::from(time_base.numerator())
+        * i128::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
+        / i128::from(denominator);
+    i64::try_from(sample - i128::from(delay_samples)).ok()
 }
 
 #[cfg(feature = "native-media")]
@@ -435,9 +435,10 @@ fn resample_audio_frame(
 
 #[cfg(feature = "native-media")]
 struct AudioChunkAssembler {
-    start_millis: u64,
-    end_millis: u64,
-    segment_millis: u64,
+    start_sample: u64,
+    end_sample: u64,
+    next_sample: Option<u64>,
+    chunk_start_sample: u64,
     chunk_samples: usize,
     max_segments: usize,
     samples: Vec<f32>,
@@ -446,17 +447,14 @@ struct AudioChunkAssembler {
 
 #[cfg(feature = "native-media")]
 impl AudioChunkAssembler {
-    fn new(
-        start_millis: u64,
-        end_millis: u64,
-        segment_millis: u64,
-        chunk_samples: usize,
-        max_segments: usize,
-    ) -> Self {
+    fn new(start_millis: u64, end_millis: u64, chunk_samples: usize, max_segments: usize) -> Self {
         Self {
-            start_millis,
-            end_millis,
-            segment_millis,
+            start_sample: start_millis.saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ))
+                / 1_000,
+            end_sample: end_millis.saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ))
+                / 1_000,
+            next_sample: None,
+            chunk_start_sample: 0,
             chunk_samples,
             max_segments,
             samples: Vec::with_capacity(chunk_samples),
@@ -464,35 +462,79 @@ impl AudioChunkAssembler {
         }
     }
 
-    fn push(&mut self, frame_start_millis: u64, samples: &[f32]) {
-        if frame_start_millis >= self.end_millis {
+    fn push(&mut self, frame_start_sample: i64, samples: &[f32]) {
+        let frame_start = i128::from(frame_start_sample);
+        if frame_start >= i128::from(self.end_sample) || samples.is_empty() || self.is_full() {
             return;
         }
-        let rate = u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
-        let first = self
-            .start_millis
-            .saturating_sub(frame_start_millis)
-            .saturating_mul(rate)
-            .div_ceil(1_000);
-        let last = self
-            .end_millis
-            .saturating_sub(frame_start_millis)
-            .saturating_mul(rate)
-            .div_ceil(1_000);
-        let first = usize::try_from(first)
+        let first = usize::try_from((i128::from(self.start_sample) - frame_start).max(0))
             .unwrap_or(usize::MAX)
             .min(samples.len());
-        let last = usize::try_from(last)
-            .unwrap_or(usize::MAX)
-            .min(samples.len());
-        for sample in &samples[first..last] {
-            if self.is_full() {
+        if first == samples.len() {
+            return;
+        }
+        let actual_start = u64::try_from(frame_start + first as i128)
+            .expect("samples before the nonnegative request window were clipped");
+        let next = *self.next_sample.get_or_insert(actual_start);
+        // Rational time-base conversion and resampler delay can differ by one
+        // sample. Larger discontinuities must preserve the media timeline.
+        if actual_start > next.saturating_add(1) {
+            self.append_silence(actual_start - next);
+        }
+        let skipped = if actual_start.saturating_add(1) < next {
+            usize::try_from(next - actual_start).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
+        let first = first.saturating_add(skipped).min(samples.len());
+        self.append(&samples[first..]);
+    }
+
+    fn available(&self) -> usize {
+        let next = self.next_sample.unwrap_or(self.end_sample);
+        self.chunk_samples
+            .saturating_sub(self.samples.len())
+            .min(usize::try_from(self.end_sample.saturating_sub(next)).unwrap_or(usize::MAX))
+    }
+
+    fn append(&mut self, mut samples: &[f32]) {
+        while !samples.is_empty() && !self.is_full() {
+            let count = self.available().min(samples.len());
+            if count == 0 {
                 break;
             }
-            self.samples.push(*sample);
-            if self.samples.len() == self.chunk_samples {
-                self.flush();
+            if self.samples.is_empty() {
+                self.chunk_start_sample = self.next_sample.expect("timeline starts before append");
             }
+            self.samples.extend_from_slice(&samples[..count]);
+            self.advance(count);
+            samples = &samples[count..];
+        }
+    }
+
+    fn append_silence(&mut self, mut remaining: u64) {
+        while remaining > 0 && !self.is_full() {
+            let count = self
+                .available()
+                .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+            if count == 0 {
+                break;
+            }
+            if self.samples.is_empty() {
+                self.chunk_start_sample = self.next_sample.expect("timeline starts before silence");
+            }
+            self.samples.resize(self.samples.len() + count, 0.0);
+            self.advance(count);
+            remaining -= count as u64;
+        }
+    }
+
+    fn advance(&mut self, count: usize) {
+        self.next_sample = self
+            .next_sample
+            .map(|next| next.saturating_add(count as u64));
+        if self.samples.len() == self.chunk_samples {
+            self.flush();
         }
     }
 
@@ -500,22 +542,13 @@ impl AudioChunkAssembler {
         if self.samples.is_empty() || self.segments.len() == self.max_segments {
             return;
         }
-        let segment_start = self.start_millis.saturating_add(
-            u64::try_from(self.segments.len())
-                .unwrap_or(u64::MAX)
-                .saturating_mul(self.segment_millis),
-        );
-        if segment_start >= self.end_millis {
-            self.samples.clear();
-            return;
-        }
-        let sample_duration = u64::try_from(self.samples.len())
-            .unwrap_or(u64::MAX)
+        let rate = u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
+        let segment_start = self.chunk_start_sample.saturating_mul(1_000) / rate;
+        let segment_end = self
+            .chunk_start_sample
+            .saturating_add(self.samples.len() as u64)
             .saturating_mul(1_000)
-            / u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
-        let segment_end = segment_start
-            .saturating_add(sample_duration)
-            .min(self.end_millis);
+            / rate;
         let f32le_bytes = self
             .samples
             .iter()
@@ -658,6 +691,74 @@ mod tests {
         assert_eq!(frame.width, 16);
         assert_eq!(frame.height, 16);
         assert_eq!(frame.rgb24_bytes.len(), 16 * 16 * 3);
+        std::fs::remove_file(output_path).unwrap();
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_chunks_preserve_stream_offsets_and_internal_gaps() {
+        let mut output = AudioChunkAssembler::new(0, 6_000, 16_000, 1);
+        output.push(80_000, &[1.0; 1_600]);
+        output.push(86_400, &[2.0; 1_600]);
+        let segments = output.finish();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            (segments[0].start_millis, segments[0].end_millis),
+            (5_000, 5_500)
+        );
+        let samples = segments[0]
+            .f32le_bytes
+            .chunks_exact(4)
+            .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(&samples[..1_600], &[1.0; 1_600]);
+        assert_eq!(&samples[1_600..6_400], &[0.0; 4_800]);
+        assert_eq!(&samples[6_400..], &[2.0; 1_600]);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_chunks_clip_negative_time_and_overlapping_frames() {
+        let mut output = AudioChunkAssembler::new(0, 2_000, 16_000, 1);
+        output.push(-1_600, &[1.0; 3_200]);
+        output.push(0, &[1.0; 3_200]);
+        let segments = output.finish();
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].start_millis, segments[0].end_millis), (0, 200));
+        assert_eq!(segments[0].f32le_bytes.len(), 3_200 * 4);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_decode_preserves_delayed_stream_start() {
+        let output_path = std::env::temp_dir().join(format!(
+            "lakeprism-delayed-audio-{}.m4a",
+            std::process::id()
+        ));
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-itsoffset",
+                "5",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=sample_rate=16000:duration=0.5",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&output_path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let segments = decode_audio_segments(&output_path, 0, 7_000, 1_000, 3).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!((4_900..=5_100).contains(&segments[0].start_millis));
+        assert!(segments[0].end_millis > segments[0].start_millis);
+        assert!(segments[0].end_millis < 6_000);
         std::fs::remove_file(output_path).unwrap();
     }
 

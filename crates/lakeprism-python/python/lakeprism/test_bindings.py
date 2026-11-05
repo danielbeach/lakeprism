@@ -444,6 +444,33 @@ def test_recording_dataset_empty_search_and_invalid_selection(tmp_path):
         dataset.ingest(empty, model=None)
 
 
+def test_speech_adapter_anchors_results_to_decoded_audio_start(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from lakeprism import _speech_adapter, _lakeprism
+
+    row = {
+        "start_millis": 5000, "end_millis": 8000, "sample_rate_hz": 16000,
+        "channel_count": 1, "f32le": b"fixture audio",
+    }
+    table = SimpleNamespace(to_pylist=lambda: [row])
+    reader = SimpleNamespace(read_all=lambda: table)
+    plan = SimpleNamespace(to_pyarrow=lambda: reader)
+    session = SimpleNamespace(
+        media_metadata=lambda uri: (10000, 1, 1),
+        audio_segments=lambda *args, **kwargs: plan,
+    )
+    segment = SimpleNamespace(start=0.25, end=1.0, text="fixture speech")
+    model = SimpleNamespace(transcribe=lambda *args, **kwargs: ([segment], None))
+    monkeypatch.setattr(_lakeprism, "MediaSession", lambda: session)
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(frombuffer=lambda *args, **kwargs: None))
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=lambda *args, **kwargs: model))
+    result = _speech_adapter.transcribe(tmp_path / "input.mp4", tmp_path / "model.bin")
+    assert result == {"segments": [{
+        "start_millis": 5250, "end_millis": 6000, "text": "fixture speech",
+        "confidence_millis": None,
+    }]}
+
+
 def test_python_native_audio_seek_preserves_late_window_samples(tmp_path):
     if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
         pytest.skip("requires native FFmpeg")
