@@ -11,6 +11,7 @@ delta-rs = ["dep:lakeprism-delta"]
 [dependencies]
 arrow.workspace = true
 datafusion.workspace = true
+fs2.workspace = true
 lakeprism-arrow = { path = "../lakeprism-arrow" }
 lakeprism-core = { path = "../lakeprism-core" }
 lakeprism-datafusion = { path = "../lakeprism-datafusion" }
@@ -19,7 +20,10 @@ lakeprism-index = { path = "../lakeprism-index" }
 parquet.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

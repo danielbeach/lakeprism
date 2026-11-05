@@ -4,6 +4,7 @@ import os
 import struct
 import sys
 import wave
+from urllib.parse import unquote
 
 import pytest
 
@@ -372,3 +373,143 @@ def test_whisper_subprocess_transcribes_local_audio_or_video_with_lineage(tmp_pa
     assert segments[0].operator_version == "fixture-whisper-v1"
     assert segments[0].model == "fixture"
     assert segments[0].model_version == "1"
+
+
+def test_recording_dataset_folder_reuse_refresh_and_partial_failure(tmp_path):
+    if not hasattr(lakeprism, "WhisperSubprocessConfig"):
+        pytest.skip("Whisper subprocess support was not compiled")
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    source = recordings / "speech ' unicode \u00e9.wav"
+    source.write_bytes(b"fixture")
+    artifact = tmp_path / "model.bin"
+    artifact.write_bytes(b"fixture model")
+    calls = tmp_path / "calls"
+    adapter = tmp_path / "fixture_adapter.py"
+    adapter.write_text(
+        "import json, pathlib, sys\n"
+        f"with pathlib.Path({str(calls)!r}).open('a') as log: log.write('call\\n')\n"
+        "if pathlib.Path(sys.argv[1]).read_bytes() == b'bad': sys.exit(2)\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps({'segments': ["
+        "{'start_millis': 0, 'end_millis': 500, 'text': \"country's future\"}]}))\n"
+    )
+
+    class FixtureModel:
+        revision = "1"
+
+        def configuration(self, staging):
+            return lakeprism.WhisperSubprocessConfig(
+                sys.executable, [str(adapter), "{input}", "{output}", "{model}"],
+                str(artifact), str(staging), operator_version="fixture",
+                model="fixture", model_version=self.revision,
+            )
+
+    model = FixtureModel()
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
+    assert dataset.ingest(recordings, model=model)[0]["status"] == "written"
+    assert dataset.ingest(recordings, model=model)[0]["status"] == "reused"
+    assert len(calls.read_text().splitlines()) == 1
+    reopened = lakeprism.RecordingDataset(dataset.path)
+    hits = reopened.search("country's").collect()
+    assert unquote(hits[0]["source_uri"]) == unquote(source.as_uri())
+    assert [{key: value for key, value in row.items() if key != "source_uri"} for row in hits] == [{
+        "start_millis": "0", "end_millis": "500",
+        "text": "country's future",
+    }]
+    source.write_bytes(b"updated")
+    assert reopened.ingest(source, model=model)[0]["status"] == "written"
+    model.revision = "2"
+    assert reopened.ingest(source, model=model)[0]["status"] == "written"
+    source.write_bytes(b"bad")
+    other = recordings / "other.wav"
+    other.write_bytes(b"fixture")
+    with pytest.raises(lakeprism.IngestionError) as failed:
+        reopened.ingest(recordings, model=model)
+    assert {row["status"] for row in failed.value.results} == {"failed", "written"}
+    assert len(reopened.search("country").collect()) == 2
+    source.write_bytes(b"updated")
+    assert reopened.ingest(recordings, model=model)[0]["status"] == "reused"
+
+
+def test_recording_dataset_empty_search_and_invalid_selection(tmp_path):
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
+    assert dataset.search("country").collect() == []
+    with pytest.raises(ValueError, match="nonempty"):
+        dataset.search(" ")
+    with pytest.raises(ValueError, match="integer"):
+        dataset.search("country", limit=True)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="no supported"):
+        dataset.ingest(empty, model=None)
+
+
+def test_python_native_audio_seek_preserves_late_window_samples(tmp_path):
+    if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
+        pytest.skip("requires native FFmpeg")
+    pytest.importorskip("pyarrow")
+    fixture = tmp_path / "long.wav"
+    with wave.open(str(fixture), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(struct.pack("<h", 4096) * (65 * 16000))
+    session = lakeprism.MediaSession()
+    assert session.media_metadata(fixture.as_uri()) == (65000, 0, 1)
+    assert session.audio_segments(fixture.as_uri(), 66000, 67000, 1000, 1).collect() == []
+    rows = session.audio_segments(
+        fixture.as_uri(), 60000, 65000, 30000, 1, include_payload=True,
+    ).to_pyarrow().read_all().to_pylist()
+    assert len(rows) == 1
+    assert (rows[0]["start_millis"], rows[0]["end_millis"]) == (60000, 65000)
+    samples = struct.unpack("<" + "f" * (5 * 16000), rows[0]["f32le"])
+    assert all(abs(sample - 0.125) < 1e-6 for sample in samples)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX child liveness assertion")
+def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tmp_path):
+    if not hasattr(lakeprism, "WhisperSubprocessConfig"):
+        pytest.skip("Whisper subprocess support was not compiled")
+    import _thread
+    import threading
+    import time
+
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"fixture")
+    artifact = tmp_path / "model.bin"
+    artifact.write_bytes(b"fixture")
+    marker = tmp_path / "child.pid"
+    adapter = tmp_path / "waiting_adapter.py"
+    adapter.write_text(
+        "import os, pathlib, time\n"
+        f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+
+    class FixtureModel:
+        def configuration(self, staging):
+            return lakeprism.WhisperSubprocessConfig(
+                sys.executable, [str(adapter), "{input}", "{output}", "{model}"],
+                str(artifact), str(staging), timeout_seconds=5,
+                operator_version="fixture", model="fixture", model_version="1",
+            )
+
+    def interrupt_started_adapter():
+        for _ in range(400):
+            if marker.exists():
+                _thread.interrupt_main()
+                return
+            time.sleep(0.01)
+
+    interrupter = threading.Thread(target=interrupt_started_adapter)
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
+    interrupter.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            dataset.ingest(source, model=FixtureModel())
+    finally:
+        interrupter.join()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
+    assert list((dataset.path / "staging").iterdir()) == []
+    assert dataset.search("anything").collect() == []

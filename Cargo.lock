@@ -3441,6 +3441,7 @@ version = "0.1.0-alpha.2"
 dependencies = [
  "arrow",
  "datafusion",
+ "fs2",
  "lakeprism-arrow",
  "lakeprism-core",
  "lakeprism-datafusion",
@@ -3449,8 +3450,11 @@ dependencies = [
  "parquet",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror",
  "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

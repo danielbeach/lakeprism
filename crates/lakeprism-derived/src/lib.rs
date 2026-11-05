@@ -4,6 +4,8 @@
 //! read-only here: when enabled it delegates snapshot registration to delta-rs
 //! instead of attempting to emulate Delta transaction semantics.
 
+pub mod recordings;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::Path;

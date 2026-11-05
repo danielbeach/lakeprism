@@ -40,6 +40,10 @@ notebook = [
   "tqdm>=4.64",
 ]
 test = ["pytest>=7"]
+speech = [
+  "faster-whisper==1.2.1",
+  "pyarrow>=14",
+]
 
 [tool.maturin]
 module-name = "lakeprism._lakeprism"

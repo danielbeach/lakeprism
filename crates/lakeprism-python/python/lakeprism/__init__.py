@@ -208,3 +208,13 @@ except ImportError:
     pass
 else:
     __all__.append("WhisperSubprocessConfig")
+
+from .recordings import IngestionError, RecordingDataset
+from .speech import SpeechModel, prepare_speech_model
+
+__all__ += [
+    "IngestionError",
+    "RecordingDataset",
+    "SpeechModel",
+    "prepare_speech_model",
+]

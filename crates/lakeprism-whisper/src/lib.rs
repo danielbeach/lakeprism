@@ -413,7 +413,7 @@ fn execution(kind: WhisperExecutionKind) -> WhisperExecutionError {
     WhisperExecutionError { kind }
 }
 impl WhisperExecutionKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::InputNotLocalFile => "input_not_local_file",
             Self::InputTooLarge => "input_too_large",

@@ -10,6 +10,7 @@ PyO3 extension are validated only in the target-matched CI job.
 | Governed Rust SQL and lifecycle | `lakeprism-datafusion` lifecycle, permit, deadline, cancellation, audit, and mixed-workload tests | Query/cpu permits remain bounded; cancellation and expired deadlines become terminal statuses; planning failures become `Failed` rather than remaining `Pending`. |
 | Local documents, tables, images, and OCR | generated minimal DOCX/PDF ZIP fixtures in `lakeprism-datafusion` and `lakeprism-documents` tests | Sections, normalized tables, and image payloads are bounded. Default OCR returns a provider-unavailable error; the registered deterministic fixture proves the contract without fabricated OCR. |
 | Local video and audio | generated MP4/stereo WAV fixtures in `lakeprism-media` and Python tests; missing local URIs without `native-media` | Matched hosts decode real frames and normalized mono 16 kHz audio. Audio acceptance checks the resampler tail, exact sample count, and bounded time window. Builds without native codecs return explicit `NotImplemented` errors. |
+| Durable recording workflow | `lakeprism-derived::recordings` and installed Python tests; real-model release example | Fingerprints include content and model/operator/parameter lineage. Failed refreshes preserve published data, old lazy readers retain their immutable files, concurrent writers fail explicitly, and interrupted adapters are reaped. Late audio windows seek with decoder preroll. |
 | Transcript, semantic, hybrid, and cross-modal indexes | deterministic lineage-bearing fixtures in `lakeprism-index` and `lakeprism-datafusion` tests | Exact lineage is required; transcript search remains index-only; semantic/hybrid ranking labels and bounded cold work are deterministic. |
 | Optimizer explain and cold/warm | `lakeprism-index` unit tests, `benches/cold_warm.rs`, and `scripts/check-cold-warm-benchmark.sh` | Exact persisted lineage selects warm work with zero new provider calls; changed lineage selects bounded cold work. The benchmark prints machine-readable local timings. |
 | Flight SQL equivalence | `lakeprism-flight` tonic client, prepared statement, metadata, cancellation, and disconnect tests | Flight’s statement/ticket/DoGet path returns the same Arrow batches from the shared `MediaSession`; handles are opaque and ticket use is bounded. |
@@ -87,6 +88,47 @@ and embeddings have configured-provider paths; OCR and image understanding
 have contracts, not bundled production models. Diarization, scene extraction,
 clip/region export, perceptual deduplication, and action/event detection are
 future product work, not capabilities implied by a passing local suite.
+
+## Local product 1.0 acceptance
+
+The proposed 1.0 support contract is local recordings to a persistent,
+searchable dataset through the installed Python package. Cloud integrations,
+distributed workers, production remote Flight, OCR, diarization and scene
+detection are not prerequisites for this product contract.
+
+The candidate now supplies file/folder ingestion, an optional packaged English
+CPU speech adapter, explicit model preparation, bounded 30-second decode
+windows, immutable per-recording Parquet, atomic manifest publication,
+unchanged reuse, content/model/operator/parameter invalidation, and reopening
+for SQL without a model. Recovery is per recording, not per inference window.
+Search is case-insensitive substring matching, not semantic retrieval.
+
+Before calling this 1.0, require:
+
+1. A successful staged seven-platform publication of the exact product bytes,
+   including installed native and public workflow acceptance. Optional model
+   dependencies have a narrower support matrix than core ABI3 wheels.
+2. Licensed real-recording evaluation covering long natural speech, silence,
+   noise, window boundaries and representative container/codecs. Publish
+   transcription quality, peak memory, cold throughput and unchanged reuse
+   measurements. Repeating the short sample proves execution, not quality.
+3. Explicit compatibility commitments for public Python APIs, error/result
+   shapes, the transcript Arrow schema, and manifest version handling, with
+   supported-version reopening/upgrade tests.
+4. Crash and disk-failure acceptance around publication, supported-host
+   interruption acceptance, and a documented snapshot-retention strategy.
+   The current implementation retains old/orphaned files and needs local
+   filesystem atomic rename and advisory locking; it does not support shared
+   network storage or promise Windows power-loss durability.
+5. Feedback from users processing their own recording collections, followed
+   by a beta/API freeze and a release candidate with no known blocking defects.
+
+The model runtime uses one inference thread; the SQL runtime can use more.
+The adapter bounds each file to 1 GiB, two hours and 8,192 segments, with a
+two-hour timeout. It requires a known duration and does not overlap inference
+windows; boundary words and context can be lost. Audio windows seek with one
+second of preroll, but container/keyframe layout can require extra decoding.
+No general avoided-byte performance guarantee is implied.
 
 ### Release gates outside local validation
 

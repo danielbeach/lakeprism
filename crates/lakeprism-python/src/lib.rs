@@ -78,6 +78,112 @@ struct PythonLocalCatalog {
     inner: Mutex<lakeprism_catalog::LocalCatalog>,
 }
 
+#[pyclass(name = "_RecordingDataset")]
+struct PythonRecordingDataset {
+    inner: lakeprism_derived::recordings::RecordingDataset,
+}
+
+#[cfg(feature = "whisper-subprocess")]
+struct ControlledWhisperProvider {
+    provider: WhisperSubprocessProvider,
+    control: lakeprism_storage::QueryControl,
+}
+
+#[cfg(feature = "whisper-subprocess")]
+impl lakeprism_index::TranscriptionProvider for ControlledWhisperProvider {
+    fn transcribe(
+        &self,
+        request: &TranscriptionRequest,
+    ) -> Result<Vec<TranscriptSegment>, lakeprism_index::IndexError> {
+        self.provider
+            .transcribe_governed(request, &self.control)
+            .map_err(|error| lakeprism_index::IndexError::ProviderExecution {
+                capability: "configured local Whisper subprocess",
+                kind: error.kind.as_str(),
+            })
+    }
+}
+
+#[pymethods]
+impl PythonRecordingDataset {
+    #[new]
+    fn new(path: &str) -> PyResult<Self> {
+        Ok(Self {
+            inner: lakeprism_derived::recordings::RecordingDataset::open(path)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+        })
+    }
+
+    #[getter]
+    fn path(&self) -> String {
+        self.inner.root().to_string_lossy().into_owned()
+    }
+
+    #[cfg(feature = "whisper-subprocess")]
+    fn ingest_file(
+        &self,
+        py: Python<'_>,
+        path: &str,
+        config: PyRef<'_, PythonWhisperSubprocessConfig>,
+    ) -> PyResult<(bool, usize)> {
+        let config = config.inner.clone();
+        let governor = Arc::new(
+            lakeprism_storage::ExecutionGovernor::new(
+                lakeprism_storage::ExecutionGovernorConfig::default(),
+            )
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+        );
+        let lineage = FeatureLineage {
+            source: SourceIdentity {
+                media_uri: String::new(),
+                source_version: String::new(),
+            },
+            operator_version: config.operator_version.clone(),
+            model: Some(config.model.clone()),
+            model_version: Some(config.model_version.clone()),
+            parameters: config.parameters.clone(),
+        };
+        let control = lakeprism_storage::QueryControl::new(None);
+        let provider = ControlledWhisperProvider {
+            provider: WhisperSubprocessProvider::new(config, governor)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?,
+            control: control.clone(),
+        };
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                self.inner
+                    .ingest(std::path::Path::new(path), lineage, &provider)
+            });
+            while !worker.is_finished() {
+                if let Err(interrupt) = py.check_signals() {
+                    control.cancel();
+                    let _cancelled_result = py
+                        .detach(|| worker.join())
+                        .map_err(|_| PyRuntimeError::new_err("recording worker panicked"))?;
+                    return Err(interrupt);
+                }
+                py.detach(|| std::thread::sleep(Duration::from_millis(25)));
+            }
+            let result = worker
+                .join()
+                .map_err(|_| PyRuntimeError::new_err("recording worker panicked"))?
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok((result.reused, result.segments))
+        })
+    }
+
+    fn session(&self, py: Python<'_>) -> PyResult<PythonMediaSession> {
+        py.detach(|| {
+            let session = PythonMediaSession::new(None)?;
+            session
+                .runtime
+                .block_on(self.inner.register(&session.inner, "transcripts"))
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok(session)
+        })
+    }
+}
+
 #[cfg(feature = "unity")]
 #[pyclass(name = "UnityQueryContext", skip_from_py_object)]
 #[derive(Clone)]
@@ -1320,6 +1426,25 @@ impl PythonMediaSession {
         )))
     }
 
+    /// Inspect a local input using the same codec profile as native decoding.
+    #[cfg(feature = "native-media")]
+    fn media_metadata(&self, py: Python<'_>, uri: &str) -> PyResult<(Option<u64>, usize, usize)> {
+        validate_local_file_uri(uri)?;
+        let path = url::Url::parse(uri)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .to_file_path()
+            .map_err(|_| PyValueError::new_err("URI must identify a local file"))?;
+        py.detach(|| {
+            let metadata = lakeprism_media::probe_media(path)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok((
+                metadata.duration_millis,
+                metadata.video_stream_count,
+                metadata.audio_stream_count,
+            ))
+        })
+    }
+
     /// Return a lazy semantic ranking plan. `candidate_limit=0` means exact
     /// ranking over every compatible registered embedding; a positive value is
     /// explicitly approximate and appears in `ranking_semantics`.
@@ -1952,6 +2077,7 @@ fn _lakeprism(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "whisper-subprocess")]
     module.add_class::<PythonWhisperSubprocessConfig>()?;
     module.add_class::<PythonLocalCatalog>()?;
+    module.add_class::<PythonRecordingDataset>()?;
     #[cfg(feature = "unity")]
     module.add_class::<PythonUnityQueryContext>()?;
     #[cfg(feature = "unity")]

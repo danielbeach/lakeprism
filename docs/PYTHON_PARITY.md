@@ -9,6 +9,7 @@ used by Rust and the CLI. It does not reimplement query behavior in Python.
 | Local media, catalog DDL, SQL, Arrow, explain, lifecycle | `MediaRef`, `LocalCatalog`, `MediaSession`, `LazyPlan` | Default |
 | Local documents, video/audio plans, transcript/semantic/hybrid indexes | `document_*`, `video_frames`, `audio_segments`, search methods | Native FFmpeg only for actual decode |
 | Derived snapshots | `refresh_embedding_index`, `register_derived_snapshot` | Default |
+| Durable local recording datasets | `RecordingDataset`, `SpeechModel`, `prepare_speech_model` | Rust fingerprints, atomic manifests and Parquet; ingestion needs `whisper-subprocess`; bundled adapter needs `native-media` and optional `speech` dependencies |
 | Configured local batch embeddings | `EmbeddingSubprocessConfig`, `MediaSession.with_embedding_subprocess` | `embedding-subprocess`; no model or executable is bundled |
 | Configured local audio/video transcription | `WhisperSubprocessConfig`, `MediaSession.with_transcription_subprocess`, `MediaSession.transcribe` | `whisper-subprocess`; local `file://` only; no model or executable is bundled |
 | Delta read/write | `register_delta`, `write_delta_ipc` | `delta-rs`; local `file://` only |
@@ -77,7 +78,9 @@ library-path overrides so unbundled dependencies cannot mask a broken wheel.
 
 See [the real local workflow](../examples/local_transcription/README.md) for
 native audio normalization, actual offline CPU Whisper inference, SQL search,
-and Parquet persistence/reload using the candidate wheel.
+and Parquet persistence/reload using the candidate wheel. The example uses the
+installed public recording API, checks unchanged-file reuse, and also runs a
+recording longer than 60 seconds across multiple inference windows.
 
 ## Equivalent workflows
 

@@ -235,7 +235,7 @@ jobs:
           if-no-files-found: error
 
   local-workflow:
-    needs: wheel
+    needs: [metadata, wheel]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -245,14 +245,18 @@ jobs:
           path: dist/python
       - uses: astral-sh/setup-uv@v6
       - name: Run the real offline CPU transcription and Parquet workflow
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           uv venv --python 3.12 .local-workflow-venv
-          uv pip install --python .local-workflow-venv/bin/python dist/python/*.whl \
-            -r examples/local_transcription/requirements.txt
+          uv pip install --python .local-workflow-venv/bin/python \
+            --find-links dist/python "lakeprism[speech]==$VERSION"
           .local-workflow-venv/bin/python examples/local_transcription/demo.py \
             --prepare --work-dir target/local-transcription
           .local-workflow-venv/bin/python examples/local_transcription/demo.py \
             --work-dir target/local-transcription --check-sample
+          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+            --work-dir target/local-transcription --check-long-recording
       - uses: actions/upload-artifact@v4
         with:
           name: local-workflow-results

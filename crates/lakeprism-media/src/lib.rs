@@ -263,6 +263,17 @@ pub fn decode_audio_segments(
     let context = codec::context::Context::from_parameters(stream.parameters())?;
     let mut decoder = context.decoder().audio()?;
     decoder.set_parameters(stream.parameters())?;
+    if input.duration() > 0 && start_millis >= (input.duration() as u64).div_ceil(1_000) {
+        return Ok(Vec::new());
+    }
+    // Keep decoder/resampler preroll while avoiding a scan from byte zero for
+    // every consecutive transcription window.
+    if start_millis > 1_000 {
+        let timestamp = i64::try_from(start_millis.saturating_sub(1_000))
+            .unwrap_or(i64::MAX / 1_000)
+            .saturating_mul(1_000);
+        input.seek(timestamp, ..timestamp)?;
+    }
     let output_format = util::format::Sample::F32(util::format::sample::Type::Packed);
     let mut resampler = None;
     let mut decoded = frame::Audio::empty();

@@ -40,6 +40,60 @@ bundles decode-only FFmpeg shared libraries, LGPL notices, build details, and
 complete corresponding source. Neither version bundles speech/embedding models,
 cloud credentials, or a cloud credential broker.
 
+## Local recordings to a searchable dataset
+
+The checkout's `0.1.0a2` candidate provides an installed-package workflow, not
+just a repository script. Use Python 3.12 and install the matching candidate
+wheel with its `speech` extra; these APIs are not in published `0.1.0a1`:
+
+```bash
+python -m pip install --find-links /path/to/downloaded/wheels "lakeprism[speech]==0.1.0a2"
+```
+
+```python
+from lakeprism import RecordingDataset, SpeechModel, prepare_speech_model
+
+# Explicit one-time download of pinned English model weights (~76 MB).
+prepare_speech_model("./models/tiny.en")
+
+# Subsequent ingestion and search work offline.
+dataset = RecordingDataset("./interview-index")
+model = SpeechModel("./models/tiny.en")
+results = dataset.ingest("./recordings", model=model)  # file or recursive folder
+print(results)  # written / reused, with per-file segment counts
+print(dataset.search("climate").to_pyarrow().read_all().to_pylist())
+
+# Reopen without loading a model or repeating inference.
+reopened = RecordingDataset("./interview-index")
+table = reopened.session().plan(
+    "SELECT source_uri, start_millis, text FROM transcripts "
+    "WHERE start_millis >= 60000 ORDER BY source_uri, start_millis"
+).to_pyarrow().read_all()
+```
+
+Rust owns decoding, provider limits, content fingerprints, lineage, and
+immutable Parquet publication. Unchanged files reuse completed results.
+Changed files or model/inference lineage produce replacements. Each recording
+commits atomically; failed refreshes retain the previous transcript. Folder
+ingestion attempts every selected recording, then raises `IngestionError`
+with per-file `results` if any failed. Interrupting ingestion stops the
+adapter; rerunning reuses completed recordings and restarts the interrupted file.
+
+The bundled adapter uses English tiny.en on CPU with one inference thread,
+30-second audio windows, and bounds of 1 GiB, two hours, 8,192 transcript
+segments, and a two-hour subprocess timeout per recording. These are safety
+bounds, not a quality or throughput guarantee. WAV and supported MP4/MOV/M4A,
+Matroska/WebM files require an audio stream and known duration. Window
+boundaries can reduce transcription quality. Models are not downloaded during
+ingestion. The `speech` extra is not validated on Alpine.
+
+Published snapshots remain available to existing lazy plans. Replaced and
+unpublished orphan snapshots are retained; automatic garbage collection,
+implicit removal of deleted sources, and resume within a recording are not
+implemented. Use an application-owned local dataset directory, not a shared
+or remote filesystem. See the [runnable real-model example](examples/local_transcription/README.md)
+and [1.0 acceptance contract](docs/ACCEPTANCE_MATRIX.md#local-product-10-acceptance).
+
 ## Start with Python
 
 Create a local session, register media metadata, build a lazy plan, and consume
@@ -145,6 +199,7 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 | `document_search(uri, query, limit)` | Bounded local document text search. | Query must be nonempty; limit is at most 1,024. |
 | `video_frames(uri, start, end, every, limit, include_rgb24=False)` | Lazy sampled video-frame rows. | `native-media` wheel with target-matched FFmpeg; max 32 frames. |
 | `audio_segments(uri, start, end, segment, limit, include_payload=False)` | Lazy normalized mono 16 kHz `f32le` audio chunks. | `native-media` wheel with target-matched FFmpeg; max 1,024 chunks. |
+| `media_metadata(uri)` | Returns `(duration_millis, video_stream_count, audio_stream_count)`. | `native-media`; local `file://`; duration may be unknown. |
 | `MediaSession.with_transcription_subprocess(config)` | Creates a session with a bounded local Whisper-compatible adapter. | Requires `whisper-subprocess`; no model or executable is bundled. |
 | `session.transcribe(uri, media_type, source_version, ...)` | Transcribes a local audio/video file, returns typed timestamped rows, and registers them in the transcript index. | Local `file://` only; media type is `audio` or `video`; max 1,024 segments. |
 | `plan_video_frames(timestamps, ...)` | Plans bounded frame timestamps without decoding media. | Available in every wheel. |
@@ -186,8 +241,9 @@ bash scripts/build-python-wheels.sh \
 
 ### Transcribe local audio or video
 
-The standard wheel includes the **provider contract**, not a model. Supply an
-application-installed adapter, an existing local model artifact, and an
+The standard wheel includes the **provider contract**, not a model. For a custom
+provider instead of the packaged speech adapter, supply an application-installed
+adapter, an existing local model artifact, and an
 application-owned private staging directory. The adapter receives direct argv
 with staged `{input}`, `{output}`, and `{model}` paths; LakePrism never invokes
 a shell or stores the model path in transcript rows.
@@ -297,8 +353,10 @@ hash and installation checks.
 
 The `0.1.0a2` candidate extends that matrix with installed native decoding,
 build-library isolation, FFmpeg source/license/configuration verification,
-and an actual offline CPU speech-model workflow. It requires new runner proof
-before a new publication; `0.1.0a1` files remain immutable.
+and an actual offline CPU speech-model workflow. The native-bundle baseline
+passed [all seven targets](https://github.com/danielbeach/lakeprism/actions/runs/41927164614).
+The new persistent recording workflow requires another complete runner pass
+before publication; `0.1.0a1` files remain immutable.
 
 Publishing requires all of these gates in the same workflow run:
 
@@ -326,7 +384,7 @@ No long-lived PyPI API token is needed.
 
 Use the Actions **PyPI** workflow with `publish=false` for build-only
 validation. Set `publish=true` on `main` to perform the full staged release,
-or push a tag matching the package version, such as `v0.1.0a1`. Publishing is
+or push a tag matching the package version, such as `v0.1.0a2`. Publishing is
 an external, immutable release action; do not reuse a version for new bytes.
 
 Live Databricks/Unity data-plane acceptance remains an opt-in requirement
@@ -372,4 +430,7 @@ opt-in cloud acceptance boundary.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+LakePrism source is Apache-2.0. See [LICENSE](LICENSE). Native candidate wheels
+also redistribute FFmpeg under LGPL-2.1-or-later, with its source and notices
+inside the wheel. Explicitly downloaded model weights have separate MIT
+terms and attribution beside the model files.

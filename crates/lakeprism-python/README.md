@@ -1,8 +1,15 @@
 # LakePrism Python
 
 `lakeprism` is the Maturin/PyO3 notebook binding for the local LakePrism
-session. Install the published alpha with `pip install lakeprism==0.1.0a1`, or
-build the next `0.1.0a2` candidate from this repository:
+session. This package version is `0.1.0a2`; its native wheels add bundled media
+decoding and a persistent recording-to-SQL workflow. See the repository's
+release status before installing from PyPI:
+
+```bash
+python -m pip install lakeprism==0.1.0a2
+```
+
+Or build a matching native wheel from this repository:
 
 ```bash
 bash scripts/build-python-wheels.sh --platform native --out dist/python
@@ -70,7 +77,16 @@ traits rather than Python object wrappers.
 
 Python wheels include `WhisperSubprocessConfig` and
 `MediaSession.with_transcription_subprocess`, but deliberately do **not**
-include a model runtime, model artifact, or adapter executable. The config
+include a model runtime or model artifact. Candidate wheels include a Python
+adapter for the optional `speech` extra and the `RecordingDataset` workflow;
+`prepare_speech_model(path)` explicitly downloads the pinned English model,
+then `SpeechModel(path)` configures offline CPU inference. `RecordingDataset`
+ingests files/folders, atomically persists lineage-bearing Parquet snapshots,
+reuses unchanged recordings, and reopens them for SQL/search without a model.
+Inputs are bounded to 1 GiB and two hours, with 30-second decode windows.
+See the root README's recording workflow for installation and current limits.
+
+For application-owned adapters, the config
 requires an absolute executable, explicit argument vector (not a shell
 command), validated local model artifact, and private staging directory.
 `session.transcribe` accepts only a local `file://` audio/video URI and an
