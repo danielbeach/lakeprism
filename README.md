@@ -13,7 +13,7 @@ See [Release readiness](#release-readiness) for validated capabilities and limit
 [local recording-to-SQL workflow](examples/local_transcription/README.md),
 including persistent transcripts, unchanged reuse, and explicit model preparation.
 
-**1.0 candidate work:** explicit recovery/removal/vacuum, reader-safe retention,
+**Preparing `1.0.0rc1`:** explicit recovery/removal/vacuum, reader-safe retention,
 batched refresh, stable transcript Arrow types, alpha-format reopening, and
 digital-silence protection are implemented in source, not published `0.1.0a2`.
 See the [local recording contract](docs/LOCAL_RECORDINGS_CONTRACT.md).

@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "lakeprism"
-version = "0.1.0a2"
-description = "Notebook-friendly bindings for governed local LakePrism queries"
+version = "1.0.0rc1"
+description = "Local recording datasets and governed SQL queries over media and Apache Arrow"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0 AND LGPL-2.1-or-later"
@@ -13,7 +13,7 @@ license-files = ["LICENSE", "FFMPEG-LICENSE.txt"]
 authors = [{ name = "LakePrism contributors" }]
 keywords = ["arrow", "datafusion", "delta-lake", "lakehouse", "notebook"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",

@@ -1,12 +1,14 @@
 # LakePrism Python
 
 `lakeprism` is the Maturin/PyO3 notebook binding for the local LakePrism
-session. This package version is `0.1.0a2`; its native wheels add bundled media
-decoding and a persistent recording-to-SQL workflow. Install the published
-alpha from PyPI:
+session. This package version is the **`1.0.0rc1` release candidate** for local
+recording datasets: native media decoding, offline English transcription,
+unchanged reuse, durable Parquet, SQL, explicit recovery and reader-safe
+retention. Stable 1.0 still requires candidate acceptance and feedback.
+Install the candidate when available on PyPI:
 
 ```bash
-python -m pip install lakeprism==0.1.0a2
+python -m pip install lakeprism==1.0.0rc1
 ```
 
 Or build a matching native wheel from this repository:
@@ -85,6 +87,16 @@ ingests files/folders, atomically persists lineage-bearing Parquet snapshots,
 reuses unchanged recordings, and reopens them for SQL/search without a model.
 Inputs are bounded to 1 GiB and two hours, with 30-second decode windows.
 See the root README's recording workflow for installation and current limits.
+
+The candidate adds `recordings()`, `remove()`, `vacuum()` and explicit
+`RecordingDataset.recover()`, stable structured dataset errors and transcript
+Arrow types, and compatibility with production alpha manifest format 1.
+Use a dedicated dataset directory separate from original inputs. Vacuum
+requires readers to be closed/dropped and retains a previous recovery
+generation. The [local product contract](https://github.com/danielbeach/lakeprism/blob/main/docs/LOCAL_RECORDINGS_CONTRACT.md)
+defines the frozen 1.0 surface; cloud and distributed integrations remain
+experimental. Speech release gates target Python 3.12 on Linux glibc
+x86_64/ARM64, macOS Intel/Apple Silicon and Windows x86_64, not Alpine.
 
 For application-owned adapters, the config
 requires an absolute executable, explicit argument vector (not a shell

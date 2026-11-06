@@ -146,7 +146,8 @@ case "$host_target:$python_machine" in
 esac
 
 mkdir -p "$out"
-raw="target/unrepaired-$platform"
+mkdir -p target
+raw="$(mktemp -d "target/unrepaired-$platform.XXXXXXXX")"
 PYTHON="$python_bin" bash scripts/build-wheel-ffmpeg.sh
 export FFMPEG_DIR="$PWD/target/wheel-ffmpeg"
 export PKG_CONFIG_PATH="$FFMPEG_DIR/lib/pkgconfig"
