@@ -25,3 +25,6 @@ uuid.workspace = true
 name = "lakeprism-whisper-fixture"
 path = "src/bin/fixture.rs"
 required-features = ["fixture-provider"]
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }

@@ -773,7 +773,8 @@ def test_python_native_audio_seek_preserves_late_window_samples(tmp_path):
     assert all(abs(sample - 0.125) < 1e-6 for sample in samples)
 
 
-def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tmp_path):
+@pytest.mark.parametrize("stop", ["interrupt", "timeout"])
+def test_recording_ingestion_stop_reaps_adapter_and_keeps_dataset_usable(tmp_path, stop):
     if not hasattr(lakeprism, "WhisperSubprocessConfig"):
         pytest.skip("Whisper subprocess support was not compiled")
     import _thread
@@ -786,11 +787,19 @@ def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tm
     artifact.write_bytes(b"fixture")
     marker = tmp_path / "child.pid"
     adapter = tmp_path / "waiting_adapter.py"
-    adapter.write_text(
+    waiting_worker = (
         "import os, pathlib, time\n"
         f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))\n"
         "time.sleep(30)\n"
     )
+    if stop == "timeout" and sys.platform == "win32":
+        # The launcher can exit before its descendant; ownership must outlive it.
+        adapter.write_text(
+            "import subprocess, sys\n"
+            f"subprocess.Popen([sys.executable, '-c', {waiting_worker!r}])\n"
+        )
+    else:
+        adapter.write_text(waiting_worker)
 
     class FixtureModel:
         def configuration(self, staging):
@@ -807,14 +816,21 @@ def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tm
                 return
             time.sleep(0.01)
 
-    interrupter = threading.Thread(target=interrupt_started_adapter)
     dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
-    interrupter.start()
-    try:
-        with pytest.raises(KeyboardInterrupt):
+    if stop == "interrupt":
+        interrupter = threading.Thread(target=interrupt_started_adapter)
+        interrupter.start()
+        try:
+            with pytest.raises(KeyboardInterrupt):
+                dataset.ingest(source, model=FixtureModel())
+        finally:
+            interrupter.join()
+    else:
+        with pytest.raises(lakeprism.IngestionError) as failed:
             dataset.ingest(source, model=FixtureModel())
-    finally:
-        interrupter.join()
+        result = failed.value.results
+        assert result[0]["status"] == "failed"
+        assert result[0]["error_code"] == "timed_out"
     pid = int(marker.read_text())
     if sys.platform == "win32":
         import ctypes

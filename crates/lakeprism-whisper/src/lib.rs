@@ -18,6 +18,13 @@ use serde::Deserialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+#[cfg(windows)]
+mod windows_child;
+#[cfg(windows)]
+use windows_child::AdapterChild;
+#[cfg(not(windows))]
+type AdapterChild = std::process::Child;
+
 const MAX_ARGUMENTS: usize = 64;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -256,26 +263,33 @@ impl WhisperSubprocessProvider {
                 "{model}" => self.config.model_artifact.as_os_str().to_os_string(),
                 _ => argument.clone().into(),
             });
-        let mut child = Command::new(&self.config.executable)
+        let mut command = Command::new(&self.config.executable);
+        command
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        let mut child = AdapterChild::spawn(command)
+            .map_err(|_| execution(WhisperExecutionKind::SpawnFailed))?;
+        #[cfg(not(windows))]
+        let mut child = command
             .spawn()
             .map_err(|_| execution(WhisperExecutionKind::SpawnFailed))?;
         let started = Instant::now();
         let succeeded = loop {
-            ensure_active(control).inspect_err(|_| {
-                terminate_and_reap(&mut child);
-            })?;
+            if let Err(error) = ensure_active(control) {
+                terminate_and_reap(&mut child)?;
+                return Err(error);
+            }
             if started.elapsed() >= self.config.timeout {
-                terminate_and_reap(&mut child);
+                terminate_and_reap(&mut child)?;
                 return Err(execution(WhisperExecutionKind::TimedOut));
             }
             let status = match child.try_wait() {
                 Ok(status) => status,
                 Err(_) => {
-                    terminate_and_reap(&mut child);
+                    terminate_and_reap(&mut child)?;
                     return Err(execution(WhisperExecutionKind::Io));
                 }
             };
@@ -515,9 +529,20 @@ fn valid_executable(path: &Path) -> bool {
         true
     }
 }
-fn terminate_and_reap(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+fn terminate_and_reap(child: &mut AdapterChild) -> Result<(), WhisperExecutionError> {
+    #[cfg(windows)]
+    let result = child.terminate_and_reap();
+    #[cfg(not(windows))]
+    let result = (|| {
+        match child.kill() {
+            Err(error) if error.kind() != std::io::ErrorKind::InvalidInput => return Err(error),
+            // InvalidInput means this owned child was already reaped.
+            _ => {}
+        }
+        child.wait()?;
+        Ok::<_, std::io::Error>(())
+    })();
+    result.map_err(|_| execution(WhisperExecutionKind::Io))
 }
 #[cfg(unix)]
 fn restrict_directory(path: &Path) {

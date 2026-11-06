@@ -3631,6 +3631,7 @@ dependencies = [
  "thiserror",
  "url",
  "uuid",
+ "windows",
 ]
 
 [[package]]
