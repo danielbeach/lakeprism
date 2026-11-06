@@ -30,6 +30,9 @@ On Windows, use `.demo-venv\Scripts\python.exe` instead of
 `.demo-venv/bin/python`.
 Neither platform needs a system `ffmpeg` executable or a Rust compiler when
 using the published wheel.
+Windows speech requires Microsoft's x64 Visual C++ runtime for CTranslate2;
+install the [supported redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
+if it is missing. No GPU/CUDA installation is needed for this CPU workflow.
 
 `--prepare` downloads a pinned, checksummed recording and a pinned,
 checksummed model. It copies attribution/license notices beside the assets.

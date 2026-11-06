@@ -19,6 +19,12 @@ Alpine/musl speech dependencies, other Python versions, GPU inference,
 diarization and non-English accuracy are not supported claims. These are
 candidate targets, not substitutes for a successful hosted release run.
 
+Windows speech also requires the
+[Microsoft x64 Visual C++ runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist),
+a [CTranslate2 prerequisite](https://opennmt.net/CTranslate2/installation.html).
+Hosted runners already provide it; a clean desktop may need installation.
+CPU inference does not require CUDA, a GPU, system FFmpeg or a Rust compiler.
+
 Native decoding supports WAV, MP4/MOV/M4A and Matroska/WebM with the codecs
 listed in [the README](../README.md#documents-media-and-retrieval). Unsupported
 containers/codecs fail explicitly. The speech adapter selects the first audio
