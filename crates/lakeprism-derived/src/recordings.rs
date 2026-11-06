@@ -321,7 +321,7 @@ impl RecordingDataset {
             FileExt::try_lock_shared(&file)
         };
         result.map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if lock_is_contended(&error) {
                 RecordingError::ReadersBusy
             } else {
                 RecordingError::Io(error)
@@ -376,7 +376,7 @@ impl RecordingDataset {
             .truncate(false)
             .open(lock_path)?;
         lock.try_lock_exclusive().map_err(|error| {
-            if error.kind() == std::io::ErrorKind::WouldBlock {
+            if lock_is_contended(&error) {
                 RecordingError::WriterBusy
             } else {
                 RecordingError::Io(error)
@@ -693,6 +693,13 @@ impl RecordingDataset {
         fs::rename(temporary, self.root.join(name))?;
         Ok(())
     }
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || error
+            .raw_os_error()
+            .is_some_and(|code| Some(code) == fs2::lock_contended_error().raw_os_error())
 }
 
 fn snapshot_file_name(name: &str) -> bool {
