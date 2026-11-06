@@ -11,11 +11,26 @@ prefix="$root/target/wheel-ffmpeg"
 notices="$root/crates/lakeprism-python/python/lakeprism/_ffmpeg"
 archive="$work/ffmpeg-$version.tar.xz"
 mkdir -p "$work" "$prefix" "$notices"
+candidate="$archive"
 if [[ ! -f "$archive" ]]; then
-  curl --fail --location --retry 3 "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" \
-    --output "$archive"
+  candidate="$(mktemp "$work/.ffmpeg-$version.XXXXXXXX")"
+  trap 'rm -f "$candidate"' EXIT
+  for attempt in 1 2 3 4; do
+    if curl --fail --location --connect-timeout 30 --max-time 180 \
+      "https://ffmpeg.org/releases/ffmpeg-$version.tar.xz" --output "$candidate"; then
+      break
+    else
+      status=$?
+      if [[ "$attempt" == 4 ]]; then
+        exit "$status"
+      fi
+      printf 'FFmpeg source download failed (%s); retrying attempt %s of 4\n' \
+        "$status" "$((attempt + 1))" >&2
+      sleep "$((1 << (attempt - 1)))"
+    fi
+  done
 fi
-"$python" - "$archive" "$sha256" <<'PY'
+"$python" - "$candidate" "$sha256" <<'PY'
 import hashlib
 from pathlib import Path
 import sys
@@ -23,6 +38,10 @@ import sys
 if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != sys.argv[2]:
     raise SystemExit("FFmpeg source SHA-256 mismatch; refusing to build")
 PY
+if [[ "$candidate" != "$archive" ]]; then
+  mv "$candidate" "$archive"
+  trap - EXIT
+fi
 
 source="$work/ffmpeg-$version"
 if [[ ! -d "$source" ]]; then

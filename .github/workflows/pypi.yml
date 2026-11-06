@@ -314,7 +314,7 @@ jobs:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           uv run --no-project --python 3.12 --with pytest python -m pytest -q \
-            scripts/test_verify_python_artifacts.py
+            scripts/test_verify_python_artifacts.py scripts/test_build_wheel_ffmpeg.py
           uv run --no-project --python 3.12 scripts/verify-python-artifacts.py dist/python "$VERSION"
           uv tool run --from twine==6.1.0 twine check dist/python/*
       - uses: actions/upload-artifact@v4
