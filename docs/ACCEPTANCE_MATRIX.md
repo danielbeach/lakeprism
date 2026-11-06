@@ -9,7 +9,7 @@ PyO3 extension are validated only in the target-matched CI job.
 | Durable catalog and CLI | `lakeprism-cli/tests/acceptance.rs`; a fresh catalog under `target/lakeprism-cli-acceptance` | `init`, `register`, reopened SQL, DDL discovery, CSV output, and `EXPLAIN MEDIA` agree with the Rust catalog/session path. |
 | Governed Rust SQL and lifecycle | `lakeprism-datafusion` lifecycle, permit, deadline, cancellation, audit, and mixed-workload tests | Query/cpu permits remain bounded; cancellation and expired deadlines become terminal statuses; planning failures become `Failed` rather than remaining `Pending`. |
 | Local documents, tables, images, and OCR | generated minimal DOCX/PDF ZIP fixtures in `lakeprism-datafusion` and `lakeprism-documents` tests | Sections, normalized tables, and image payloads are bounded. Default OCR returns a provider-unavailable error; the registered deterministic fixture proves the contract without fabricated OCR. |
-| Local video and audio | generated MP4/stereo WAV fixtures in `lakeprism-media` and Python tests; missing local URIs without `native-media` | Matched hosts decode real frames and normalized mono 16 kHz audio. Audio acceptance checks the resampler tail, exact sample count, and bounded time window. Builds without native codecs return explicit `NotImplemented` errors. |
+| Local video and audio | generated MP4/stereo WAV/WebM fixtures in `lakeprism-media` and Python tests; missing local URIs without `native-media` | Matched hosts decode real frames and normalized mono 16 kHz audio. Audio acceptance checks resampler tails, sample counts, stream offsets/gaps, shorter audio streams, quantized timestamps, and pre-allocation PCM bounds. Builds without native codecs return explicit `NotImplemented` errors. |
 | Durable recording workflow | `lakeprism-derived::recordings` and installed Python tests; real-model release example | Fingerprints include content and model/operator/parameter lineage. Failed refreshes preserve published data, old lazy readers retain their immutable files, concurrent writers fail explicitly, and interrupted adapters are reaped. Late audio windows seek with decoder preroll. |
 | Transcript, semantic, hybrid, and cross-modal indexes | deterministic lineage-bearing fixtures in `lakeprism-index` and `lakeprism-datafusion` tests | Exact lineage is required; transcript search remains index-only; semantic/hybrid ranking labels and bounded cold work are deterministic. |
 | Optimizer explain and cold/warm | `lakeprism-index` unit tests, `benches/cold_warm.rs`, and `scripts/check-cold-warm-benchmark.sh` | Exact persisted lineage selects warm work with zero new provider calls; changed lineage selects bounded cold work. The benchmark prints machine-readable local timings. |
@@ -102,6 +102,12 @@ windows, immutable per-recording Parquet, atomic manifest publication,
 unchanged reuse, content/model/operator/parameter invalidation, and reopening
 for SQL without a model. Recovery is per recording, not per inference window.
 Search is case-insensitive substring matching, not semantic retrieval.
+
+**Unreleased media hardening:** current source preserves audio-stream offsets
+and gaps, accepts audio ending before its video container, limits requested PCM
+to 64 MiB per decode call, and reports fixed redacted speech failure categories.
+Installed-package tests cover these contracts; native WebM tests compare sample
+counts against FFmpeg. These changes are not in published `0.1.0a2`.
 
 Before calling this 1.0, require:
 

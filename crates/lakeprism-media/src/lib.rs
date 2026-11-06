@@ -345,6 +345,13 @@ pub fn decode_audio_segments(
         .ok_or(MediaError::MissingAudioStream)?;
     let stream_index = stream.index();
     let time_base = stream.time_base();
+    if time_base.numerator() <= 0 || time_base.denominator() <= 0 {
+        return Err(ffmpeg_next::Error::InvalidData.into());
+    }
+    let timestamp_tolerance_samples = (u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
+        * u64::from(time_base.numerator().unsigned_abs()))
+    .div_ceil(u64::from(time_base.denominator().unsigned_abs()))
+    .max(1);
     let context = codec::context::Context::from_parameters(stream.parameters())?;
     let mut decoder = context.decoder().audio()?;
     decoder.set_parameters(stream.parameters())?;
@@ -363,8 +370,13 @@ pub fn decode_audio_segments(
     let mut resampler = None;
     let mut decoded = frame::Audio::empty();
     let mut output_end_sample = 0;
-    let mut output =
-        AudioChunkAssembler::new(start_millis, end_millis, chunk_samples, max_segments);
+    let mut output = AudioChunkAssembler::new(
+        start_millis,
+        end_millis,
+        chunk_samples,
+        max_segments,
+        timestamp_tolerance_samples,
+    );
 
     loop {
         let mut packet = ffmpeg_next::Packet::empty();
@@ -539,6 +551,7 @@ struct AudioChunkAssembler {
     end_sample: u64,
     next_sample: Option<u64>,
     chunk_start_sample: u64,
+    timestamp_tolerance_samples: u64,
     chunk_samples: usize,
     max_segments: usize,
     samples: Vec<f32>,
@@ -547,14 +560,21 @@ struct AudioChunkAssembler {
 
 #[cfg(feature = "native-media")]
 impl AudioChunkAssembler {
-    fn new(start_millis: u64, end_millis: u64, chunk_samples: usize, max_segments: usize) -> Self {
+    fn new(
+        start_millis: u64,
+        end_millis: u64,
+        chunk_samples: usize,
+        max_segments: usize,
+        timestamp_tolerance_samples: u64,
+    ) -> Self {
         Self {
-            start_sample: start_millis.saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ))
-                / 1_000,
-            end_sample: end_millis.saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ))
-                / 1_000,
+            start_sample: start_millis
+                .saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ) / 1_000),
+            end_sample: end_millis
+                .saturating_mul(u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ) / 1_000),
             next_sample: None,
             chunk_start_sample: 0,
+            timestamp_tolerance_samples,
             chunk_samples,
             max_segments,
             samples: Vec::with_capacity(chunk_samples),
@@ -576,12 +596,12 @@ impl AudioChunkAssembler {
         let actual_start = u64::try_from(frame_start + first as i128)
             .expect("samples before the nonnegative request window were clipped");
         let next = *self.next_sample.get_or_insert(actual_start);
-        // Rational time-base conversion and resampler delay can differ by one
-        // sample. Larger discontinuities must preserve the media timeline.
-        if actual_start > next.saturating_add(1) {
+        // Preserve discontinuities without interpreting timestamp quantization
+        // (for example WebM's millisecond ticks) as lost or added PCM samples.
+        if actual_start > next.saturating_add(self.timestamp_tolerance_samples) {
             self.append_silence(actual_start - next);
         }
-        let skipped = if actual_start.saturating_add(1) < next {
+        let skipped = if actual_start.saturating_add(self.timestamp_tolerance_samples) < next {
             usize::try_from(next - actual_start).unwrap_or(usize::MAX)
         } else {
             0
@@ -642,13 +662,12 @@ impl AudioChunkAssembler {
         if self.samples.is_empty() || self.segments.len() == self.max_segments {
             return;
         }
-        let rate = u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ);
-        let segment_start = self.chunk_start_sample.saturating_mul(1_000) / rate;
+        let samples_per_milli = u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ) / 1_000;
+        let segment_start = self.chunk_start_sample / samples_per_milli;
         let segment_end = self
             .chunk_start_sample
             .saturating_add(self.samples.len() as u64)
-            .saturating_mul(1_000)
-            / rate;
+            / samples_per_milli;
         let f32le_bytes = self
             .samples
             .iter()
@@ -834,7 +853,7 @@ mod tests {
     #[cfg(feature = "native-media")]
     #[test]
     fn audio_chunks_preserve_stream_offsets_and_internal_gaps() {
-        let mut output = AudioChunkAssembler::new(0, 6_000, 16_000, 1);
+        let mut output = AudioChunkAssembler::new(0, 6_000, 16_000, 1, 1);
         output.push(80_000, &[1.0; 1_600]);
         output.push(86_400, &[2.0; 1_600]);
         let segments = output.finish();
@@ -856,13 +875,68 @@ mod tests {
     #[cfg(feature = "native-media")]
     #[test]
     fn audio_chunks_clip_negative_time_and_overlapping_frames() {
-        let mut output = AudioChunkAssembler::new(0, 2_000, 16_000, 1);
+        let mut output = AudioChunkAssembler::new(0, 2_000, 16_000, 1, 1);
         output.push(-1_600, &[1.0; 3_200]);
         output.push(0, &[1.0; 3_200]);
         let segments = output.finish();
         assert_eq!(segments.len(), 1);
         assert_eq!((segments[0].start_millis, segments[0].end_millis), (0, 200));
         assert_eq!(segments[0].f32le_bytes.len(), 3_200 * 4);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_chunks_preserve_large_valid_sample_positions_without_overflow() {
+        let start = 2_000_000_000_000_000;
+        let mut output = AudioChunkAssembler::new(start, start + 1, 16, 1, 1);
+        output.push(i64::try_from(start * 16).unwrap(), &[1.0; 16]);
+        let segments = output.finish();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            (segments[0].start_millis, segments[0].end_millis),
+            (start, start + 1)
+        );
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_decode_preserves_samples_with_quantized_webm_timestamps() {
+        let output_path = std::env::temp_dir().join(format!(
+            "lakeprism-quantized-audio-{}.webm",
+            std::process::id()
+        ));
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=sample_rate=44100:duration=1",
+                "-ac",
+                "2",
+                "-c:a",
+                "vorbis",
+                "-strict",
+                "-2",
+            ])
+            .arg(&output_path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let reference = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&output_path)
+            .args(["-ar", "16000", "-ac", "1", "-f", "f32le", "-"])
+            .output()
+            .unwrap();
+        assert!(reference.status.success());
+        let segments = decode_audio_segments(&output_path, 0, 2_000, 2_000, 1).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].f32le_bytes.len(), reference.stdout.len());
+        std::fs::remove_file(output_path).unwrap();
     }
 
     #[cfg(feature = "native-media")]
