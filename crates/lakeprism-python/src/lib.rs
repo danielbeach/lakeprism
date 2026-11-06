@@ -1416,6 +1416,13 @@ impl PythonMediaSession {
         include_payload: bool,
     ) -> PyResult<PythonLazyPlan> {
         validate_decode_request(start_millis, end_millis, segment_millis, limit, 1_024)?;
+        lakeprism_media::audio_decode_chunk_samples(
+            start_millis,
+            end_millis,
+            segment_millis,
+            limit,
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok(self.plan(audio_segments_sql(
             uri,
             start_millis,

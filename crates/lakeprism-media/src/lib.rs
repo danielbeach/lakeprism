@@ -2,12 +2,54 @@ use lakeprism_core::MediaConstraints;
 #[cfg(feature = "native-media")]
 use std::path::Path;
 
-#[cfg(feature = "native-media")]
 use thiserror::Error;
+
+pub const MAX_AUDIO_PCM_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_AUDIO_SEGMENTS: usize = 1_024;
+/// LakePrism's stable local SQL audio representation.
+pub const NORMALIZED_AUDIO_SAMPLE_RATE_HZ: u32 = 16_000;
+
+#[derive(Debug, Error, Eq, PartialEq)]
+pub enum AudioDecodeError {
+    #[error(
+        "audio decode requires a nonzero interval, 1..=1024 chunks, and a valid nonnegative sample timeline"
+    )]
+    InvalidRequest,
+    #[error("decoded audio payload exceeds the 64 MiB request budget")]
+    PayloadBudget,
+}
+
+/// Validate before opening media or allocating PCM. Chunk storage is limited
+/// to the requested window even when the interval is much larger.
+pub fn audio_decode_chunk_samples(
+    start_millis: u64,
+    end_millis: u64,
+    segment_millis: u64,
+    max_segments: usize,
+) -> Result<usize, AudioDecodeError> {
+    let samples_per_milli = u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ) / 1_000;
+    if segment_millis == 0
+        || !(1..=MAX_AUDIO_SEGMENTS).contains(&max_segments)
+        || end_millis < start_millis
+        || end_millis > i64::MAX as u64 / samples_per_milli
+    {
+        return Err(AudioDecodeError::InvalidRequest);
+    }
+    let samples_per_milli = u128::from(samples_per_milli);
+    let window = u128::from(end_millis - start_millis) * samples_per_milli;
+    let chunk = (u128::from(segment_millis) * samples_per_milli).min(window);
+    let total = window.min(chunk * max_segments as u128);
+    if total * std::mem::size_of::<f32>() as u128 > MAX_AUDIO_PCM_BYTES as u128 {
+        return Err(AudioDecodeError::PayloadBudget);
+    }
+    usize::try_from(chunk).map_err(|_| AudioDecodeError::PayloadBudget)
+}
 
 #[cfg(feature = "native-media")]
 #[derive(Debug, Error)]
 pub enum MediaError {
+    #[error(transparent)]
+    AudioDecode(#[from] AudioDecodeError),
     #[error(transparent)]
     Ffmpeg(#[from] ffmpeg_next::Error),
     #[error("no video stream was found")]
@@ -113,10 +155,6 @@ pub struct AudioSegment {
     pub channel_count: u16,
     pub f32le_bytes: Vec<u8>,
 }
-
-/// LakePrism's stable local SQL audio representation.
-#[cfg(feature = "native-media")]
-pub const NORMALIZED_AUDIO_SAMPLE_RATE_HZ: u32 = 16_000;
 
 #[cfg(feature = "native-media")]
 pub fn probe_media(path: impl AsRef<Path>) -> Result<MediaMetadata, MediaError> {
@@ -292,7 +330,9 @@ pub fn decode_audio_segments(
 ) -> Result<Vec<AudioSegment>, MediaError> {
     use ffmpeg_next::{codec, format, frame, media, util};
 
-    if segment_millis == 0 || max_segments == 0 || end_millis <= start_millis {
+    let chunk_samples =
+        audio_decode_chunk_samples(start_millis, end_millis, segment_millis, max_segments)?;
+    if chunk_samples == 0 {
         return Ok(Vec::new());
     }
 
@@ -323,14 +363,8 @@ pub fn decode_audio_segments(
     let mut resampler = None;
     let mut decoded = frame::Audio::empty();
     let mut output_end_sample = 0;
-    let chunk_samples = usize::try_from(
-        u64::from(NORMALIZED_AUDIO_SAMPLE_RATE_HZ)
-            .saturating_mul(segment_millis)
-            .div_ceil(1_000),
-    )
-    .unwrap_or(usize::MAX);
     let mut output =
-        AudioChunkAssembler::new(start_millis, end_millis, chunk_samples.max(1), max_segments);
+        AudioChunkAssembler::new(start_millis, end_millis, chunk_samples, max_segments);
 
     loop {
         let mut packet = ffmpeg_next::Packet::empty();
@@ -708,6 +742,39 @@ pub fn plan_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_budget_checks_total_pcm_before_allocation() {
+        assert_eq!(
+            audio_decode_chunk_samples(0, 1_000_000_000, 1_000_000_000, 1),
+            Err(AudioDecodeError::PayloadBudget),
+        );
+        assert_eq!(
+            audio_decode_chunk_samples(0, 7_200_000, 30_000, 1_024),
+            Err(AudioDecodeError::PayloadBudget),
+        );
+        assert_eq!(
+            audio_decode_chunk_samples(0, 1_048_576, 1_048_576, 1),
+            Ok(16_777_216)
+        );
+        assert_eq!(
+            audio_decode_chunk_samples(0, 1_048_577, 1_048_577, 1),
+            Err(AudioDecodeError::PayloadBudget),
+        );
+        assert_eq!(
+            audio_decode_chunk_samples(0, u64::MAX, 1, 1),
+            Err(AudioDecodeError::InvalidRequest),
+        );
+    }
+
+    #[test]
+    fn audio_budget_clamps_chunk_capacity_to_the_requested_window() {
+        assert_eq!(
+            audio_decode_chunk_samples(0, 120, u64::MAX, 1_024),
+            Ok(1_920)
+        );
+        assert_eq!(audio_decode_chunk_samples(120, 120, u64::MAX, 1), Ok(0));
+    }
     use lakeprism_core::{MediaConstraints, MediaProjection};
 
     #[test]

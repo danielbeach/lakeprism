@@ -191,6 +191,9 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 
 ### Documents, media, and retrieval
 
+**Unreleased:** audio-stream metadata, corrected audio timeline handling, and
+the 64 MiB audio request budget below are not included in PyPI `0.1.0a2`.
+
 | API | Functionality | Availability |
 | --- | --- | --- |
 | `document_sections(uri)` | Lazy PDF page / DOCX paragraph rows. | Local path or `file://`. |
@@ -198,8 +201,9 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 | `document_images(uri, include_bytes=False)` | Lazy DOCX embedded-image metadata, with bytes only when requested. | Local path or `file://`. |
 | `document_search(uri, query, limit)` | Bounded local document text search. | Query must be nonempty; limit is at most 1,024. |
 | `video_frames(uri, start, end, every, limit, include_rgb24=False)` | Lazy sampled video-frame rows. | `native-media` wheel with target-matched FFmpeg; max 32 frames. |
-| `audio_segments(uri, start, end, segment, limit, include_payload=False)` | Lazy normalized mono 16 kHz `f32le` audio chunks. | `native-media` wheel with target-matched FFmpeg; max 1,024 chunks. |
+| `audio_segments(uri, start, end, segment, limit, include_payload=False)` | Lazy normalized mono 16 kHz `f32le` audio chunks. | `native-media` wheel with target-matched FFmpeg; max 1,024 chunks and 64 MiB requested PCM per call, including metadata-only calls. |
 | `media_metadata(uri)` | Returns `(duration_millis, video_stream_count, audio_stream_count)`. | `native-media`; local `file://`; duration may be unknown. |
+| `audio_metadata(uri)` | Returns `(start_millis, end_millis)` for the first audio stream on the media timeline. | `native-media`; local `file://`; audio end may be unknown and is not the container duration. |
 | `MediaSession.with_transcription_subprocess(config)` | Creates a session with a bounded local Whisper-compatible adapter. | Requires `whisper-subprocess`; no model or executable is bundled. |
 | `session.transcribe(uri, media_type, source_version, ...)` | Transcribes a local audio/video file, returns typed timestamped rows, and registers them in the transcript index. | Local `file://` only; media type is `audio` or `video`; max 1,024 segments. |
 | `plan_video_frames(timestamps, ...)` | Plans bounded frame timestamps without decoding media. | Available in every wheel. |

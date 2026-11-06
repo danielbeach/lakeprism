@@ -300,6 +300,18 @@ def test_python_native_audio_decodes_without_pyarrow_or_ffmpeg_executable(tmp_pa
     assert [(row["start_millis"], row["end_millis"]) for row in rows] == [
         ("0", "40"), ("40", "80"), ("80", "120")
     ]
+    large_interval = session.audio_segments(
+        fixture.as_uri(), 0, 120, 1_000_000_000, 1024,
+    ).collect()
+    assert len(large_interval) == 1
+    assert large_interval[0]["end_millis"] == "120"
+
+
+def test_audio_segments_rejects_excessive_pcm_before_execution():
+    with pytest.raises(ValueError, match="64 MiB"):
+        lakeprism.MediaSession().audio_segments(
+            "file:///missing.wav", 0, 1_000_000_000, 1_000_000_000, 1,
+        )
 
 
 @pytest.mark.parametrize("sample_rate", [8000, 44100, 48000])

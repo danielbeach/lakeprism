@@ -109,6 +109,15 @@ impl LocalMediaDecodeOptions {
                 "{function_name} limit must not exceed {maximum_limit}"
             )));
         }
+        if function_name == AUDIO_SEGMENTS_FUNCTION {
+            lakeprism_media::audio_decode_chunk_samples(
+                self.start_millis,
+                self.end_millis,
+                self.interval_millis,
+                self.limit,
+            )
+            .map_err(|error| DataFusionError::Plan(error.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -1976,11 +1985,14 @@ impl TableFunctionImpl for AudioSegments {
             AUDIO_SEGMENTS_FUNCTION,
             "uri, start_millis, end_millis, segment_millis, limit, include_payload",
         )?;
-        if limit > MAX_AUDIO_SEGMENTS {
-            return Err(DataFusionError::Plan(format!(
-                "{AUDIO_SEGMENTS_FUNCTION} limit must not exceed {MAX_AUDIO_SEGMENTS}"
-            )));
+        LocalMediaDecodeOptions {
+            start_millis: start,
+            end_millis: end,
+            interval_millis: segment,
+            limit,
+            include_payload,
         }
+        .validate(AUDIO_SEGMENTS_FUNCTION, MAX_AUDIO_SEGMENTS)?;
         audio_segments_provider(
             &uri,
             start,
@@ -3400,6 +3412,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, DataFusionError::NotImplemented(_)));
+    }
+
+    #[tokio::test]
+    async fn audio_udtf_rejects_oversized_pcm_before_opening_media() {
+        let session = MediaSession::new();
+        let error = session.collect(&format!(
+            "SELECT * FROM {AUDIO_SEGMENTS_FUNCTION}('file:///missing.wav', 0, 1000000000, 1000000000, 1, false)"
+        )).await.unwrap_err();
+        assert!(error.to_string().contains("64 MiB"), "{error}");
     }
 
     #[cfg(not(feature = "native-media"))]
