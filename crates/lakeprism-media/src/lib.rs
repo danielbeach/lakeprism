@@ -88,6 +88,13 @@ pub struct MediaMetadata {
 
 #[cfg(feature = "native-media")]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AudioMetadata {
+    pub start_millis: u64,
+    pub end_millis: Option<u64>,
+}
+
+#[cfg(feature = "native-media")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedVideoFrame {
     pub timestamp_millis: Option<u64>,
     pub width: u32,
@@ -138,6 +145,44 @@ pub fn probe_media_with_profile(
         duration_millis,
         video_stream_count,
         audio_stream_count,
+    })
+}
+
+/// Timeline of the first audio stream, matching `decode_audio_segments`.
+/// A missing stream duration remains unknown, not the container duration.
+#[cfg(feature = "native-media")]
+pub fn probe_audio(path: impl AsRef<Path>) -> Result<AudioMetadata, MediaError> {
+    validate_native_runtime()?;
+    let input = ffmpeg_next::format::input(&path)?;
+    validate_input_profile(&input, NativeMediaProfile::default())?;
+    let stream = input
+        .streams()
+        .find(|stream| stream.parameters().medium() == ffmpeg_next::media::Type::Audio)
+        .ok_or(MediaError::MissingAudioStream)?;
+    let time_base = stream.time_base();
+    if time_base.numerator() <= 0 || time_base.denominator() <= 0 {
+        return Err(ffmpeg_next::Error::InvalidData.into());
+    }
+    let start = match stream.start_time() {
+        ffmpeg_next::ffi::AV_NOPTS_VALUE => 0,
+        start => i128::from(start),
+    };
+    let scale = i128::from(time_base.numerator()) * 1_000;
+    let denominator = i128::from(time_base.denominator());
+    let start_millis = u64::try_from((start * scale).max(0) / denominator)
+        .map_err(|_| ffmpeg_next::Error::InvalidData)?;
+    let end_millis = if stream.duration() > 0 {
+        let end = ((start + i128::from(stream.duration())) * scale).max(0);
+        Some(
+            u64::try_from((end + denominator - 1) / denominator)
+                .map_err(|_| ffmpeg_next::Error::InvalidData)?,
+        )
+    } else {
+        None
+    };
+    Ok(AudioMetadata {
+        start_millis,
+        end_millis,
     })
 }
 
@@ -287,31 +332,37 @@ pub fn decode_audio_segments(
     let mut output =
         AudioChunkAssembler::new(start_millis, end_millis, chunk_samples.max(1), max_segments);
 
-    for (packet_stream, packet) in input.packets() {
-        if packet_stream.index() != stream_index {
+    loop {
+        let mut packet = ffmpeg_next::Packet::empty();
+        match packet.read(&mut input) {
+            Ok(()) => {}
+            Err(ffmpeg_next::Error::Eof) => break,
+            Err(error) => return Err(error.into()),
+        }
+        if packet.stream() != stream_index {
             continue;
         }
         decoder.send_packet(&packet)?;
-        while decoder.receive_frame(&mut decoded).is_ok() {
+        while receive_audio_frame(&mut decoder, &mut decoded)? {
             let frame_start =
                 audio_frame_timestamp_samples(&decoded, time_base, resampler.as_ref())
                     .unwrap_or(output_end_sample);
             let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
             output.push(frame_start, converted.plane::<f32>(0));
             output_end_sample = frame_start.saturating_add(converted.samples() as i64);
-            if output.is_full() {
+            if output.is_finished() {
                 return Ok(output.finish());
             }
         }
     }
     decoder.send_eof()?;
-    while decoder.receive_frame(&mut decoded).is_ok() {
+    while receive_audio_frame(&mut decoder, &mut decoded)? {
         let frame_start = audio_frame_timestamp_samples(&decoded, time_base, resampler.as_ref())
             .unwrap_or(output_end_sample);
         let converted = resample_audio_frame(&mut decoded, &mut resampler, output_format)?;
         output.push(frame_start, converted.plane::<f32>(0));
         output_end_sample = frame_start.saturating_add(converted.samples() as i64);
-        if output.is_full() {
+        if output.is_finished() {
             return Ok(output.finish());
         }
     }
@@ -322,12 +373,27 @@ pub fn decode_audio_segments(
             let delay = resampler.flush(&mut converted)?;
             output.push(output_end_sample, converted.plane::<f32>(0));
             output_end_sample = output_end_sample.saturating_add(converted.samples() as i64);
-            if delay.is_none() || converted.samples() == 0 || output.is_full() {
+            if delay.is_none() || converted.samples() == 0 || output.is_finished() {
                 break;
             }
         }
     }
     Ok(output.finish())
+}
+
+#[cfg(feature = "native-media")]
+fn receive_audio_frame(
+    decoder: &mut ffmpeg_next::codec::decoder::Audio,
+    frame: &mut ffmpeg_next::frame::Audio,
+) -> Result<bool, MediaError> {
+    match decoder.receive_frame(frame) {
+        Ok(()) => Ok(true),
+        Err(ffmpeg_next::Error::Eof) => Ok(false),
+        Err(ffmpeg_next::Error::Other { errno }) if errno == ffmpeg_next::error::EAGAIN => {
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(feature = "native-media")]
@@ -568,6 +634,10 @@ impl AudioChunkAssembler {
         self.segments.len() == self.max_segments
     }
 
+    fn is_finished(&self) -> bool {
+        self.is_full() || self.next_sample.is_some_and(|next| next >= self.end_sample)
+    }
+
     fn finish(mut self) -> Vec<AudioSegment> {
         self.flush();
         self.segments
@@ -726,6 +796,41 @@ mod tests {
         assert_eq!(segments.len(), 1);
         assert_eq!((segments[0].start_millis, segments[0].end_millis), (0, 200));
         assert_eq!(segments[0].f32le_bytes.len(), 3_200 * 4);
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn audio_metadata_does_not_use_the_longer_video_duration() {
+        let output_path =
+            std::env::temp_dir().join(format!("lakeprism-short-audio-{}.mp4", std::process::id()));
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:size=16x16:rate=5:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=sample_rate=16000:duration=0.12",
+                "-c:v",
+                "mpeg4",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&output_path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(probe_media(&output_path).unwrap().duration_millis.unwrap() >= 2_000);
+        let metadata = probe_audio(&output_path).unwrap();
+        assert_eq!(metadata.start_millis, 0);
+        assert!((100..1_000).contains(&metadata.end_millis.unwrap()));
+        std::fs::remove_file(output_path).unwrap();
     }
 
     #[cfg(feature = "native-media")]

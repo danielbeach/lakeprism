@@ -1445,6 +1445,21 @@ impl PythonMediaSession {
         })
     }
 
+    /// Return the selected audio stream's start and known end, in media milliseconds.
+    #[cfg(feature = "native-media")]
+    fn audio_metadata(&self, py: Python<'_>, uri: &str) -> PyResult<(u64, Option<u64>)> {
+        validate_local_file_uri(uri)?;
+        let path = url::Url::parse(uri)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .to_file_path()
+            .map_err(|_| PyValueError::new_err("URI must identify a local file"))?;
+        py.detach(|| {
+            let metadata = lakeprism_media::probe_audio(path)
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            Ok((metadata.start_millis, metadata.end_millis))
+        })
+    }
+
     /// Return a lazy semantic ranking plan. `candidate_limit=0` means exact
     /// ranking over every compatible registered embedding; a positive value is
     /// explicitly approximate and appears in `ranking_semantics`.

@@ -289,7 +289,10 @@ def test_python_native_audio_decodes_without_pyarrow_or_ffmpeg_executable(tmp_pa
         pytest.skip("native FFmpeg acceptance is enabled only on a matched CI host")
     fixture = tmp_path / "audio.wav"
     write_stereo_wave(fixture, 44100)
-    rows = lakeprism.MediaSession().audio_segments(
+    session = lakeprism.MediaSession()
+    assert session.media_metadata(fixture.as_uri()) == (120, 0, 1)
+    assert session.audio_metadata(fixture.as_uri()) == (0, 120)
+    rows = session.audio_segments(
         fixture.as_uri(), 0, 120, 40, 3, include_payload=False
     ).collect()
     assert len(rows) == 3
@@ -444,7 +447,8 @@ def test_recording_dataset_empty_search_and_invalid_selection(tmp_path):
         dataset.ingest(empty, model=None)
 
 
-def test_speech_adapter_anchors_results_to_decoded_audio_start(monkeypatch, tmp_path):
+@pytest.mark.parametrize("audio_end", [8000, None])
+def test_speech_adapter_preserves_offsets_and_accepts_audio_before_video_end(monkeypatch, tmp_path, audio_end):
     from types import SimpleNamespace
     from lakeprism import _speech_adapter, _lakeprism
 
@@ -455,9 +459,13 @@ def test_speech_adapter_anchors_results_to_decoded_audio_start(monkeypatch, tmp_
     table = SimpleNamespace(to_pylist=lambda: [row])
     reader = SimpleNamespace(read_all=lambda: table)
     plan = SimpleNamespace(to_pyarrow=lambda: reader)
+    empty_table = SimpleNamespace(to_pylist=lambda: [])
+    empty_reader = SimpleNamespace(read_all=lambda: empty_table)
+    empty_plan = SimpleNamespace(to_pyarrow=lambda: empty_reader)
     session = SimpleNamespace(
-        media_metadata=lambda uri: (10000, 1, 1),
-        audio_segments=lambda *args, **kwargs: plan,
+        media_metadata=lambda uri: (45000, 1, 1),
+        audio_metadata=lambda uri: (0, audio_end),
+        audio_segments=lambda uri, start, *args, **kwargs: plan if start == 0 else empty_plan,
     )
     segment = SimpleNamespace(start=0.25, end=1.0, text="fixture speech")
     model = SimpleNamespace(transcribe=lambda *args, **kwargs: ([segment], None))
