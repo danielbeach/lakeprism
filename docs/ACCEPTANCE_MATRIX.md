@@ -10,7 +10,7 @@ PyO3 extension are validated only in the target-matched CI job.
 | Governed Rust SQL and lifecycle | `lakeprism-datafusion` lifecycle, permit, deadline, cancellation, audit, and mixed-workload tests | Query/cpu permits remain bounded; cancellation and expired deadlines become terminal statuses; planning failures become `Failed` rather than remaining `Pending`. |
 | Local documents, tables, images, and OCR | generated minimal DOCX/PDF ZIP fixtures in `lakeprism-datafusion` and `lakeprism-documents` tests | Sections, normalized tables, and image payloads are bounded. Default OCR returns a provider-unavailable error; the registered deterministic fixture proves the contract without fabricated OCR. |
 | Local video and audio | generated MP4/stereo WAV/WebM fixtures in `lakeprism-media` and Python tests; missing local URIs without `native-media` | Matched hosts decode real frames and normalized mono 16 kHz audio. Audio acceptance checks resampler tails, sample counts, stream offsets/gaps, shorter audio streams, quantized timestamps, and pre-allocation PCM bounds. Builds without native codecs return explicit `NotImplemented` errors. |
-| Durable recording workflow | `lakeprism-derived::recordings` and installed Python tests; real-model release example | Fingerprints include content and model/operator/parameter lineage. Failed refreshes preserve published data, old lazy readers retain their immutable files, concurrent writers fail explicitly, and interrupted adapters are reaped. Late audio windows seek with decoder preroll. |
+| Durable recording workflow | `lakeprism-derived::recordings` and installed Python tests; real-model release example | Fingerprints include content and model/operator/parameter lineage. Crash/disk-full publication boundaries preserve complete commits. Explicit recovery/removal/vacuum retain the previous generation and protect lazy/physical/Arrow readers. Interrupted adapters are reaped. Late audio windows seek with decoder preroll. |
 | Transcript, semantic, hybrid, and cross-modal indexes | deterministic lineage-bearing fixtures in `lakeprism-index` and `lakeprism-datafusion` tests | Exact lineage is required; transcript search remains index-only; semantic/hybrid ranking labels and bounded cold work are deterministic. |
 | Optimizer explain and cold/warm | `lakeprism-index` unit tests, `benches/cold_warm.rs`, and `scripts/check-cold-warm-benchmark.sh` | Exact persisted lineage selects warm work with zero new provider calls; changed lineage selects bounded cold work. The benchmark prints machine-readable local timings. |
 | Flight SQL equivalence | `lakeprism-flight` tonic client, prepared statement, metadata, cancellation, and disconnect tests | Flight’s statement/ticket/DoGet path returns the same Arrow batches from the shared `MediaSession`; handles are opaque and ticket use is bounded. |
@@ -109,6 +109,15 @@ to 64 MiB per decode call, and reports fixed redacted speech failure categories.
 Installed-package tests cover these contracts; native WebM tests compare sample
 counts against FFmpeg. These changes are not in published `0.1.0a2`.
 
+**Unreleased lifecycle hardening:** an owned batch writer validates one manifest
+per folder refresh. Explicit recovery uses only a validated prior commit;
+removal/vacuum preserve reader leases and one recovery generation. Fault tests
+inject storage-full errors and abrupt child death at nine publication
+boundaries. Installed tests preserve the exact transcript Arrow schema and
+reopen original Parquet bytes written by production `0.1.0a2`.
+The [public candidate contract](LOCAL_RECORDINGS_CONTRACT.md) specifies stable
+APIs, results/errors, format handling and local-filesystem limitations.
+
 Before calling this 1.0, require:
 
 1. A successful staged seven-platform publication of the exact product bytes,
@@ -123,9 +132,10 @@ Before calling this 1.0, require:
    supported-version reopening/upgrade tests.
 4. Crash and disk-failure acceptance around publication, supported-host
    interruption acceptance, and a documented snapshot-retention strategy.
-   The current implementation retains old/orphaned files and needs local
-   filesystem atomic rename and advisory locking; it does not support shared
-   network storage or promise Windows power-loss durability.
+   Explicit vacuum now reclaims eligible old/orphaned files while preserving
+   readers and one prior generation. Local filesystem atomic rename and
+   advisory locking remain required; shared network storage and Windows
+   power-loss durability are not promised.
 5. Feedback from users processing their own recording collections, followed
    by a beta/API freeze and a release candidate with no known blocking defects.
 
@@ -135,6 +145,44 @@ two-hour timeout. It requires a known duration and does not overlap inference
 windows; boundary words and context can be lost. Audio windows seek with one
 second of preroll, but container/keyframe layout can require extra decoding.
 No general avoided-byte performance guarantee is implied.
+
+### Reproducible candidate observations
+
+`examples/local_transcription/evaluate.py` pins a SHA-256-verified 9.2 MB
+LibriSpeech subset (CC BY 4.0), reconstructing **73 distinct excerpts in three
+chapters**. Longest recording: **209.2 seconds**. It evaluates clean speech,
+seeded 15 dB white-noise variants, a 45-second digital-silence control,
+timestamp bounds, reopening and unchanged reuse. Thresholds were declared
+before execution: corpus word error rate at most 25% clean and 40% noisy,
+zero silence segments, and a natural-speech timeline longer than 120 seconds.
+The first run failed silence acceptance; a digital-zero guard fixed that
+defect without loosening the gate.
+
+Apple Silicon / Python 3.12 development-wheel results:
+
+| Measurement | Observed |
+| --- | --- |
+| Clean / noisy word error rate | 10.01% / 16.85% |
+| Silence transcript segments | 0 |
+| Evaluated audio / cold wall time | 1,043.57 s / 28.86 s |
+| Cold real-time factor | 0.0277 |
+| Unchanged refresh | 0.100 s |
+| Maximum parent / child RSS | 332.2 / 553.9 MiB |
+
+RSS values are independent process maxima, not simultaneous aggregate memory.
+The sample is limited read-English narration, not conversational/accent
+coverage or an accuracy guarantee. These are development-host observations,
+not published-release or cross-platform promises.
+
+`benchmark_refresh.py` separately measures **synthetic adapter and metadata
+overhead**, never ASR throughput. For 256 files, cold fixture publication took
+13.868 s; unchanged folder refresh took 0.041 s versus 8.513 s for 256 separate
+one-file calls. Both warm paths verified zero extra provider calls.
+
+Hosted candidate gates repeat natural-speech acceptance and refresh measurement
+on Linux x86_64. The real-model sample, long-window workflow and Parquet
+reopening run on five native non-Alpine platforms with Python 3.12.
+Successful hosted artifacts remain a release prerequisite.
 
 ### Release gates outside local validation
 

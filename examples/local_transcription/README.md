@@ -110,7 +110,25 @@ The release example also checks repeated licensed speech longer than 60 seconds:
 ```
 
 This proves cross-window execution and timestamps, not long-recording speech
-quality. Natural speech/noise evaluation remains a 1.0 requirement.
+quality. The candidate adds a separate pinned natural-speech quality gate:
+
+```bash
+.demo-venv/bin/python examples/local_transcription/evaluate.py --prepare
+.demo-venv/bin/python examples/local_transcription/evaluate.py
+.demo-venv/bin/python examples/local_transcription/benchmark_refresh.py
+```
+
+Use an installed candidate wheel, not published `0.1.0a2`, for these gates.
+Preparation downloads a 9.2 MB, checksummed LibriSpeech subset and writes CC BY
+4.0 attribution beside it. Evaluation reconstructs 73 distinct read-speech
+excerpts into three long chapters, then checks clean/noisy word error rates,
+digital silence, timestamp bounds, reopening and unchanged reuse. Reports
+include runtime versions, throughput and process RSS. This limited narration
+corpus does not establish conversational or accent robustness.
+
+The refresh benchmark uses a deterministic subprocess fixture, **not a speech
+model**. It measures publication/metadata overhead and asserts no repeated
+inference on unchanged inputs. See [measured candidate results](../../docs/ACCEPTANCE_MATRIX.md#reproducible-candidate-observations).
 
 A local Apple Silicon acceptance run also processed one hour of repeated
 licensed sample audio (115,200,044-byte WAV), producing 659 segments in
@@ -123,6 +141,8 @@ performance promise.
 Old and unpublished orphan Parquet files are intentionally retained to protect
 lazy readers. Automatic garbage collection and shared/network filesystem use
 are not supported. Use an application-owned local dataset directory.
+The unreleased candidate adds explicit reader-safe `remove`, `vacuum` and
+`recover` operations; see the [candidate contract](../../docs/LOCAL_RECORDINGS_CONTRACT.md).
 
 Only model inference is configured for one CPU thread. LakePrism's SQL runtime
 can use multiple threads; this is not a claim of strict single-core execution.

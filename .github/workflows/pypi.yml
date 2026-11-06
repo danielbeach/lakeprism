@@ -235,34 +235,64 @@ jobs:
           if-no-files-found: error
 
   local-workflow:
+    name: Speech / ${{ matrix.name }} / Python 3.12
     needs: [metadata, wheel]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: manylinux-x86_64
+            runner: ubuntu-24.04
+          - name: manylinux-aarch64
+            runner: ubuntu-24.04-arm
+          - name: macos-x86_64
+            runner: macos-15-intel
+          - name: macos-aarch64
+            runner: macos-15
+          - name: windows-x86_64
+            runner: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: wheel-manylinux-x86_64
+          name: wheel-${{ matrix.name }}
           path: dist/python
       - uses: astral-sh/setup-uv@v6
       - name: Run the real offline CPU transcription and Parquet workflow
+        shell: bash
         env:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           uv venv --python 3.12 .local-workflow-venv
-          uv pip install --python .local-workflow-venv/bin/python \
-            --find-links dist/python "lakeprism[speech]==$VERSION"
-          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+          python=".local-workflow-venv/bin/python"
+          if [[ -f .local-workflow-venv/Scripts/python.exe ]]; then
+            python=".local-workflow-venv/Scripts/python.exe"
+          fi
+          wheels=(dist/python/*.whl)
+          uv pip install --python "$python" "${wheels[0]}[speech]"
+          "$python" -c 'import importlib.metadata, os; assert importlib.metadata.version("lakeprism") == os.environ["VERSION"]'
+          "$python" examples/local_transcription/demo.py \
             --prepare --work-dir target/local-transcription
-          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+          "$python" examples/local_transcription/demo.py \
             --work-dir target/local-transcription --check-sample
-          .local-workflow-venv/bin/python examples/local_transcription/demo.py \
+          "$python" examples/local_transcription/demo.py \
             --work-dir target/local-transcription --check-long-recording
+      - name: Gate natural English speech, controlled noise, silence and refresh
+        if: matrix.name == 'manylinux-x86_64'
+        run: |
+          .local-workflow-venv/bin/python examples/local_transcription/evaluate.py --prepare
+          .local-workflow-venv/bin/python examples/local_transcription/evaluate.py
+          .local-workflow-venv/bin/python examples/local_transcription/benchmark_refresh.py
       - uses: actions/upload-artifact@v4
         with:
-          name: local-workflow-results
+          name: local-workflow-results-${{ matrix.name }}
           path: |
             target/local-transcription/transcripts.parquet
             target/local-transcription/results.json
+            target/speech-evaluation/quality-results.json
+            target/speech-evaluation/CORPUS-ATTRIBUTION.txt
+            target/recording-benchmarks/refresh-results.json
 
   artifacts:
     needs: [metadata, wheel, source]
