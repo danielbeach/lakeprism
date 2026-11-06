@@ -23,6 +23,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
+#[cfg(feature = "native-media")]
+pyo3::create_exception!(_lakeprism, UnsupportedMediaError, PyRuntimeError);
+
+#[cfg(feature = "native-media")]
+fn native_media_error(error: lakeprism_media::MediaError) -> PyErr {
+    match error {
+        lakeprism_media::MediaError::UnsupportedContainer { .. }
+        | lakeprism_media::MediaError::UnsupportedCodec { .. } => {
+            UnsupportedMediaError::new_err(error.to_string())
+        }
+        _ => PyRuntimeError::new_err(error.to_string()),
+    }
+}
+
 #[pyclass(name = "MediaRef", skip_from_py_object)]
 #[derive(Clone)]
 struct PythonMediaRef {
@@ -1442,8 +1456,7 @@ impl PythonMediaSession {
             .to_file_path()
             .map_err(|_| PyValueError::new_err("URI must identify a local file"))?;
         py.detach(|| {
-            let metadata = lakeprism_media::probe_media(path)
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            let metadata = lakeprism_media::probe_media(path).map_err(native_media_error)?;
             Ok((
                 metadata.duration_millis,
                 metadata.video_stream_count,
@@ -1461,8 +1474,7 @@ impl PythonMediaSession {
             .to_file_path()
             .map_err(|_| PyValueError::new_err("URI must identify a local file"))?;
         py.detach(|| {
-            let metadata = lakeprism_media::probe_audio(path)
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            let metadata = lakeprism_media::probe_audio(path).map_err(native_media_error)?;
             Ok((metadata.start_millis, metadata.end_millis))
         })
     }
@@ -2090,6 +2102,11 @@ fn plan_video_frames(
 
 #[pymodule]
 fn _lakeprism(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "native-media")]
+    module.add(
+        "UnsupportedMediaError",
+        module.py().get_type::<UnsupportedMediaError>(),
+    )?;
     module.add_class::<PythonMediaRef>()?;
     module.add_class::<PythonTranscriptSegment>()?;
     module.add_class::<PythonEmbeddingRecord>()?;

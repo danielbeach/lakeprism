@@ -84,6 +84,12 @@ pub enum WhisperExecutionKind {
     TimedOut,
     SpawnFailed,
     ChildFailed,
+    DependencyMissing,
+    UnsupportedMedia,
+    InvalidMedia,
+    InvalidDuration,
+    DecodeFailed,
+    ModelFailed,
     OutputTooLarge,
     InvalidOutput,
     Io,
@@ -258,7 +264,7 @@ impl WhisperSubprocessProvider {
             .spawn()
             .map_err(|_| execution(WhisperExecutionKind::SpawnFailed))?;
         let started = Instant::now();
-        loop {
+        let succeeded = loop {
             ensure_active(control).inspect_err(|_| {
                 terminate_and_reap(&mut child);
             })?;
@@ -274,20 +280,11 @@ impl WhisperSubprocessProvider {
                 }
             };
             match status {
-                Some(status) if status.success() => break,
-                Some(_) => return Err(execution(WhisperExecutionKind::ChildFailed)),
+                Some(status) => break status.success(),
                 None => thread::sleep(POLL_INTERVAL),
             }
-        }
-        let output_meta = fs::symlink_metadata(&output)
-            .map_err(|_| execution(WhisperExecutionKind::InvalidOutput))?;
-        if !output_meta.file_type().is_file() || output_meta.len() > self.config.max_output_bytes {
-            return Err(execution(WhisperExecutionKind::OutputTooLarge));
-        }
-        let rows: FixtureOutput = serde_json::from_reader(
-            File::open(&output).map_err(|_| execution(WhisperExecutionKind::InvalidOutput))?,
-        )
-        .map_err(|_| execution(WhisperExecutionKind::InvalidOutput))?;
+        };
+        let rows = read_adapter_output(&output, self.config.max_output_bytes, succeeded)?;
         if rows.segments.len() > request.max_segments {
             return Err(execution(WhisperExecutionKind::InvalidOutput));
         }
@@ -315,6 +312,71 @@ impl WhisperSubprocessProvider {
                 })
             })
             .collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AdapterOutput {
+    Success(FixtureOutput),
+    Failure(AdapterFailure),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdapterFailure {
+    error: AdapterFailureKind,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AdapterFailureKind {
+    DependencyMissing,
+    UnsupportedMedia,
+    InvalidMedia,
+    InvalidDuration,
+    DecodeFailed,
+    ModelFailed,
+    OutputTooLarge,
+    InvalidOutput,
+}
+
+impl AdapterFailureKind {
+    fn execution_kind(self) -> WhisperExecutionKind {
+        match self {
+            Self::DependencyMissing => WhisperExecutionKind::DependencyMissing,
+            Self::UnsupportedMedia => WhisperExecutionKind::UnsupportedMedia,
+            Self::InvalidMedia => WhisperExecutionKind::InvalidMedia,
+            Self::InvalidDuration => WhisperExecutionKind::InvalidDuration,
+            Self::DecodeFailed => WhisperExecutionKind::DecodeFailed,
+            Self::ModelFailed => WhisperExecutionKind::ModelFailed,
+            Self::OutputTooLarge => WhisperExecutionKind::OutputTooLarge,
+            Self::InvalidOutput => WhisperExecutionKind::InvalidOutput,
+        }
+    }
+}
+
+fn read_adapter_output(
+    output: &Path,
+    maximum: u64,
+    succeeded: bool,
+) -> Result<FixtureOutput, WhisperExecutionError> {
+    let fallback = if succeeded {
+        WhisperExecutionKind::InvalidOutput
+    } else {
+        WhisperExecutionKind::ChildFailed
+    };
+    let metadata = fs::symlink_metadata(output).map_err(|_| execution(fallback))?;
+    if !metadata.file_type().is_file() || metadata.len() > maximum {
+        return Err(execution(WhisperExecutionKind::OutputTooLarge));
+    }
+    let response: AdapterOutput =
+        serde_json::from_reader(File::open(output).map_err(|_| execution(fallback))?)
+            .map_err(|_| execution(fallback))?;
+    match (succeeded, response) {
+        (true, AdapterOutput::Success(rows)) => Ok(rows),
+        (false, AdapterOutput::Failure(failure)) => Err(execution(failure.error.execution_kind())),
+        _ => Err(execution(fallback)),
     }
 }
 
@@ -423,6 +485,12 @@ impl WhisperExecutionKind {
             Self::TimedOut => "timed_out",
             Self::SpawnFailed => "spawn_failed",
             Self::ChildFailed => "child_failed",
+            Self::DependencyMissing => "dependency_missing",
+            Self::UnsupportedMedia => "unsupported_media",
+            Self::InvalidMedia => "invalid_media",
+            Self::InvalidDuration => "invalid_duration",
+            Self::DecodeFailed => "decode_failed",
+            Self::ModelFailed => "model_failed",
             Self::OutputTooLarge => "output_too_large",
             Self::InvalidOutput => "invalid_output",
             Self::Io => "io",

@@ -286,6 +286,14 @@ oversized inputs/results, lineage mismatches, non-local sources, unsafe
 configuration, timeouts, cancellation, and resource exhaustion without
 including paths, command arguments, tokens, or transcript text in errors.
 
+**Unreleased failure protocol:** adapters may exit nonzero after writing
+`{"error": "invalid_duration"}`. Accepted categories are `dependency_missing`,
+`unsupported_media`, `invalid_media`, `invalid_duration`, `decode_failed`,
+`model_failed`, `output_too_large`, and `invalid_output`. Extra fields and
+unknown categories are rejected; legacy failures without a valid error result
+remain `child_failed`. Stderr stays private. In `RecordingDataset.ingest()`,
+inspect each failed entry's `error` in `IngestionError.results`.
+
 ## Delta, Unity, Flight, and credentials
 
 LakePrism treats credentials as request-scoped capabilities, not data. Tokens,

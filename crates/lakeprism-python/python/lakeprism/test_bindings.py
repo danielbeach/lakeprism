@@ -1,4 +1,5 @@
 import base64
+import json
 import math
 import os
 import struct
@@ -457,6 +458,88 @@ def test_recording_dataset_empty_search_and_invalid_selection(tmp_path):
     empty.mkdir()
     with pytest.raises(ValueError, match="no supported"):
         dataset.ingest(empty, model=None)
+
+
+@pytest.mark.parametrize("payload,exit_code,expected", [
+    ({"error": "invalid_duration"}, 1, "invalid_duration"),
+    ({"error": "model_failed"}, 1, "model_failed"),
+    ({"error": "private source text"}, 1, "child_failed"),
+    ({"error": "decode_failed", "details": "private source text"}, 1, "child_failed"),
+    ({"segments": []}, 1, "child_failed"),
+    ({"error": "decode_failed"}, 0, "invalid_output"),
+])
+def test_recording_dataset_redacts_typed_and_legacy_child_failures(tmp_path, payload, exit_code, expected):
+    if not hasattr(lakeprism, "WhisperSubprocessConfig"):
+        pytest.skip("Whisper subprocess support was not compiled")
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"fixture")
+    artifact = tmp_path / "model.bin"
+    artifact.write_bytes(b"fixture model")
+    adapter = tmp_path / "failure_adapter.py"
+    adapter.write_text(
+        "import json, pathlib, sys\n"
+        "sys.stderr.write('private source text')\n"
+        f"pathlib.Path(sys.argv[2]).write_text(json.dumps({payload!r}))\n"
+        f"sys.exit({exit_code})\n"
+    )
+
+    class FixtureModel:
+        def configuration(self, staging):
+            return lakeprism.WhisperSubprocessConfig(
+                sys.executable, [str(adapter), "{input}", "{output}", "{model}"],
+                str(artifact), str(staging), operator_version="fixture",
+                model="fixture", model_version="1",
+            )
+
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset")
+    with pytest.raises(lakeprism.IngestionError) as failed:
+        dataset.ingest(source, model=FixtureModel())
+    message = failed.value.results[0]["error"]
+    assert expected in message
+    assert "private source text" not in message
+    assert dataset.search("anything").collect() == []
+    assert list((dataset.path / "staging").iterdir()) == []
+
+
+@pytest.mark.parametrize("stage,expected", [
+    ("dependency", "dependency_missing"), ("probe", "invalid_media"),
+    ("profile", "unsupported_media"), ("duration", "invalid_duration"),
+    ("decode", "decode_failed"), ("model", "model_failed"),
+])
+def test_speech_adapter_reports_only_fixed_failure_categories(monkeypatch, tmp_path, stage, expected):
+    from types import SimpleNamespace
+    from lakeprism import _speech_adapter, _lakeprism
+    if not hasattr(_lakeprism, "UnsupportedMediaError"):
+        pytest.skip("requires native media")
+
+    def metadata(uri):
+        if stage == "probe":
+            raise RuntimeError("private source text")
+        if stage == "profile":
+            raise _lakeprism.UnsupportedMediaError("private source text")
+        return (None if stage == "duration" else 1000, 0, 1)
+
+    def decode(*args, **kwargs):
+        raise RuntimeError("private source text")
+
+    def model(*args, **kwargs):
+        if stage == "model":
+            raise ValueError("private source text")
+        return None
+
+    session = SimpleNamespace(
+        media_metadata=metadata, audio_metadata=lambda uri: (0, 1000),
+        audio_segments=decode,
+    )
+    monkeypatch.setattr(_lakeprism, "MediaSession", lambda: session)
+    monkeypatch.setitem(sys.modules, "numpy", None if stage == "dependency" else SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=model))
+    output = tmp_path / "result.json"
+    monkeypatch.setattr(sys, "argv", ["adapter", str(tmp_path / "input"), str(output), str(tmp_path / "model.bin")])
+    with pytest.raises(SystemExit) as failed:
+        _speech_adapter.main()
+    assert failed.value.code == 1
+    assert json.loads(output.read_text()) == {"error": expected}
 
 
 @pytest.mark.parametrize("audio_end", [8000, None])
