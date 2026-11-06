@@ -1,7 +1,7 @@
 //! Local recording snapshots. Inference and publication are serialized by an
 //! advisory writer lock; readers pin immutable files from one atomic manifest.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -11,11 +11,12 @@ use arrow::array::{ArrayRef, StringArray, UInt16Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use fs2::FileExt;
 use lakeprism_core::{FeatureLineage, MediaRef, StorageMode};
 use lakeprism_index::{TranscriptSegment, TranscriptionProvider, TranscriptionRequest};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -23,6 +24,21 @@ use uuid::Uuid;
 
 const FORMAT_VERSION: u32 = 1;
 const MAX_SEGMENTS: usize = 8_192;
+const MAX_RECORDINGS: usize = 100_000;
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicationStage {
+    SnapshotWrite,
+    SnapshotSync,
+    BackupWrite,
+    BackupSync,
+    BackupRename,
+    ManifestWrite,
+    ManifestSync,
+    ManifestRename,
+    DirectorySync,
+}
 
 #[derive(Debug, Error)]
 pub enum RecordingError {
@@ -42,16 +58,60 @@ pub enum RecordingError {
     Query(#[from] datafusion::error::DataFusionError),
     #[error("unsupported or invalid recording dataset manifest")]
     InvalidManifest,
+    #[error(
+        "recording dataset format version {0} is not supported; recovery will not downgrade it"
+    )]
+    UnsupportedVersion(u32),
+    #[error("recording dataset manifest is missing; explicit recovery is required")]
+    MissingManifest,
+    #[error("recording dataset exceeds 100000 recordings or the 64 MiB manifest bound")]
+    DatasetLimit,
+    #[error(
+        "snapshot published, but directory durability could not be confirmed; reopen before retrying"
+    )]
+    DurabilityUncertain(#[source] std::io::Error),
     #[error("recording dataset path must not be a symbolic link")]
     UnsafePath,
     #[error("another recording dataset writer is active")]
     WriterBusy,
-    #[error("recording source must be a regular local file")]
+    #[error(
+        "recording readers are active; drop all dataset sessions, plans, and streams before vacuuming"
+    )]
+    ReadersBusy,
+    #[error("recording source must be a regular local file outside the dataset directory")]
     InvalidSource,
     #[error("recording changed during transcription; previous snapshot retained")]
     SourceChanged,
     #[error("transcription returned invalid timestamps, text, count, or lineage")]
     InvalidTranscript,
+}
+
+impl RecordingError {
+    pub fn code(&self) -> &str {
+        match self {
+            Self::InvalidManifest | Self::Json(_) => "invalid_manifest",
+            Self::UnsupportedVersion(_) => "unsupported_manifest_version",
+            Self::MissingManifest => "manifest_missing",
+            Self::DatasetLimit => "dataset_limit",
+            Self::DurabilityUncertain(_) => "durability_uncertain",
+            Self::UnsafePath => "unsafe_path",
+            Self::WriterBusy => "writer_busy",
+            Self::ReadersBusy => "readers_busy",
+            Self::InvalidSource => "invalid_source",
+            Self::SourceChanged => "source_changed",
+            Self::InvalidTranscript => "invalid_transcript",
+            Self::Io(_) => "io",
+            Self::Arrow(_) | Self::Parquet(_) => "snapshot_failed",
+            Self::Provider(lakeprism_index::IndexError::ProviderExecution { kind, .. }) => kind,
+            Self::Provider(_) => "provider_failed",
+            Self::Query(_) => "query_failed",
+            Self::Derived(_) => "dataset_failed",
+        }
+    }
+
+    pub fn published(&self) -> bool {
+        matches!(self, Self::DurabilityUncertain(_))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,10 +121,16 @@ struct Snapshot {
     segments: usize,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct Manifest {
     format_version: u32,
     recordings: BTreeMap<String, Snapshot>,
+}
+
+#[derive(Deserialize)]
+struct ManifestVersion {
+    format_version: u32,
 }
 
 impl Default for Manifest {
@@ -82,22 +148,201 @@ pub struct IngestResult {
     pub segments: usize,
 }
 
+#[derive(Clone)]
 pub struct RecordingDataset {
     root: PathBuf,
+    #[cfg(test)]
+    fault: Option<Arc<dyn Fn(PublicationStage) -> std::io::Result<()> + Send + Sync>>,
+}
+
+pub struct RecordingWriter {
+    dataset: RecordingDataset,
+    _lock: File,
+    manifest: Manifest,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecoveryResult {
+    pub restored: bool,
+    pub recordings: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct VacuumResult {
+    pub removed_files: usize,
+    pub reclaimed_bytes: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RecordingInfo {
+    pub source_uri: String,
+    pub source_version: String,
+    pub segments: usize,
 }
 
 impl RecordingDataset {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, RecordingError> {
+        reject_symlink(root.as_ref())?;
         fs::create_dir_all(root.as_ref())?;
         let dataset = Self {
             root: fs::canonicalize(root)?,
+            #[cfg(test)]
+            fault: None,
         };
-        dataset.load()?;
+        let _lease = dataset.lock_readers(false)?;
+        match dataset.load() {
+            Ok(_) => {}
+            Err(RecordingError::MissingManifest) => dataset.initialize()?,
+            Err(error) => return Err(error),
+        }
         Ok(dataset)
+    }
+
+    fn initialize(&self) -> Result<(), RecordingError> {
+        let _lock = self.lock_writer()?;
+        match self.load() {
+            Ok(_) => Ok(()),
+            Err(RecordingError::MissingManifest) => {
+                if self.root.join("manifest.previous.json").exists() || self.has_snapshots()? {
+                    return Err(RecordingError::MissingManifest);
+                }
+                self.publish(&Manifest::default(), None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn recordings(&self) -> Result<Vec<RecordingInfo>, RecordingError> {
+        let _lease = self.lock_readers(false)?;
+        Ok(self
+            .load()?
+            .recordings
+            .into_iter()
+            .map(|(uri, snapshot)| RecordingInfo {
+                source_uri: uri,
+                source_version: snapshot.lineage.source.source_version,
+                segments: snapshot.segments,
+            })
+            .collect())
+    }
+
+    /// Remove an exact canonical source URI. Immutable files remain until an
+    /// explicit vacuum, and one previous committed manifest remains recoverable.
+    pub fn remove(&self, uri: &str) -> Result<bool, RecordingError> {
+        let parsed = url::Url::parse(uri).map_err(|_| RecordingError::InvalidSource)?;
+        if parsed.scheme() != "file"
+            || parsed.host_str().is_some_and(|host| host != "localhost")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(RecordingError::InvalidSource);
+        }
+        self.reject_managed_source(uri)?;
+        let mut writer = self.writer()?;
+        let mut next = writer.manifest.clone();
+        if next.recordings.remove(uri).is_none() {
+            return Ok(false);
+        }
+        writer.commit(next)?;
+        Ok(true)
+    }
+
+    /// Delete only LakePrism-owned snapshots and manifest temporaries that are
+    /// referenced by neither the active nor previous manifest. Requires no readers.
+    pub fn vacuum(&self) -> Result<VacuumResult, RecordingError> {
+        let writer = self.writer()?;
+        let _readers = self.lock_readers(true)?;
+        for uri in writer.manifest.recordings.keys() {
+            self.reject_managed_source(uri)?;
+        }
+        let mut retained = writer
+            .manifest
+            .recordings
+            .values()
+            .map(|snapshot| snapshot.file.clone())
+            .collect::<BTreeSet<_>>();
+        match self.read_manifest("manifest.previous.json") {
+            Ok(previous) => {
+                for uri in previous.recordings.keys() {
+                    self.reject_managed_source(uri)?;
+                }
+                retained.extend(
+                    previous
+                        .recordings
+                        .into_values()
+                        .map(|snapshot| snapshot.file),
+                );
+            }
+            Err(RecordingError::MissingManifest) => {}
+            Err(error) => return Err(error),
+        }
+        let mut result = VacuumResult::default();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let temporary = name
+                .strip_prefix(".manifest-")
+                .and_then(|name| name.strip_suffix(".tmp"))
+                .is_some_and(|stem| Uuid::parse_str(stem).is_ok());
+            if !retained.contains(name) && (snapshot_file_name(name) || temporary) {
+                reject_symlink(&entry.path())?;
+                let metadata = entry.metadata()?;
+                if !metadata.is_file() {
+                    return Err(RecordingError::UnsafePath);
+                }
+                fs::remove_file(entry.path())?;
+                result.removed_files += 1;
+                result.reclaimed_bytes = result.reclaimed_bytes.saturating_add(metadata.len());
+            }
+        }
+        sync_directory(&self.root)?;
+        Ok(result)
+    }
+
+    fn lock_readers(&self, exclusive: bool) -> Result<File, RecordingError> {
+        let path = self.root.join("readers.lock");
+        reject_symlink(&path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+        let result = if exclusive {
+            FileExt::try_lock_exclusive(&file)
+        } else {
+            FileExt::try_lock_shared(&file)
+        };
+        result.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                RecordingError::ReadersBusy
+            } else {
+                RecordingError::Io(error)
+            }
+        })?;
+        Ok(file)
+    }
+
+    fn reject_managed_source(&self, uri: &str) -> Result<(), RecordingError> {
+        let root_uri =
+            url::Url::from_directory_path(&self.root).map_err(|_| RecordingError::UnsafePath)?;
+        if uri.starts_with(root_uri.as_str()) {
+            let path = url::Url::parse(uri)
+                .map_err(|_| RecordingError::InvalidManifest)?
+                .to_file_path()
+                .map_err(|_| RecordingError::InvalidManifest)?;
+            if path.try_exists()? {
+                return Err(RecordingError::UnsafePath);
+            }
+        }
+        Ok(())
     }
 
     /// Commits one recording, never a partial transcript. Earlier recordings
@@ -105,9 +350,23 @@ impl RecordingDataset {
     pub fn ingest(
         &self,
         source: &Path,
-        mut lineage: FeatureLineage,
+        lineage: FeatureLineage,
         provider: &dyn TranscriptionProvider,
     ) -> Result<IngestResult, RecordingError> {
+        self.writer()?.ingest(source, lineage, provider)
+    }
+
+    /// Holds the writer lock and validates the current manifest once for a
+    /// batch. Each changed recording still publishes independently.
+    pub fn writer(&self) -> Result<RecordingWriter, RecordingError> {
+        Ok(RecordingWriter {
+            dataset: self.clone(),
+            _lock: self.lock_writer()?,
+            manifest: self.load()?,
+        })
+    }
+
+    fn lock_writer(&self) -> Result<File, RecordingError> {
         let lock_path = self.root.join("writer.lock");
         reject_symlink(&lock_path)?;
         let lock = OpenOptions::new()
@@ -123,9 +382,70 @@ impl RecordingDataset {
                 RecordingError::Io(error)
             }
         })?;
-        let mut manifest = self.load()?;
+        Ok(lock)
+    }
+
+    /// Restore the previous complete manifest only when the active manifest
+    /// is missing or invalid. Never promote uncommitted orphan snapshots.
+    pub fn recover(root: impl AsRef<Path>) -> Result<RecoveryResult, RecordingError> {
+        reject_symlink(root.as_ref())?;
+        let dataset = Self {
+            root: fs::canonicalize(root)?,
+            #[cfg(test)]
+            fault: None,
+        };
+        let _lock = dataset.lock_writer()?;
+        match dataset.load() {
+            Ok(manifest) => Ok(RecoveryResult {
+                restored: false,
+                recordings: manifest.recordings.len(),
+            }),
+            Err(
+                RecordingError::MissingManifest
+                | RecordingError::InvalidManifest
+                | RecordingError::Json(_),
+            ) => {
+                let previous = dataset.read_manifest("manifest.previous.json")?;
+                dataset.publish(&previous, None)?;
+                Ok(RecoveryResult {
+                    restored: true,
+                    recordings: previous.recordings.len(),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn has_snapshots(&self) -> Result<bool, RecordingError> {
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if snapshot_file_name(&entry.file_name().to_string_lossy()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn checkpoint(&self, stage: PublicationStage) -> Result<(), RecordingError> {
+        #[cfg(test)]
+        if let Some(fault) = &self.fault {
+            fault(stage)?;
+        }
+        #[cfg(not(test))]
+        let _ = stage;
+        Ok(())
+    }
+}
+
+impl RecordingWriter {
+    pub fn ingest(
+        &mut self,
+        source: &Path,
+        mut lineage: FeatureLineage,
+        provider: &dyn TranscriptionProvider,
+    ) -> Result<IngestResult, RecordingError> {
         let source = fs::canonicalize(source)?;
-        if !source.is_file() {
+        if !source.is_file() || source.starts_with(&self.dataset.root) {
             return Err(RecordingError::InvalidSource);
         }
         let uri = url::Url::from_file_path(&source)
@@ -134,7 +454,12 @@ impl RecordingDataset {
         lineage.source.media_uri = uri.clone();
         lineage.source.source_version = fingerprint(&source)?;
         crate::reject_credential_like_json(&serde_json::to_value(&lineage)?)?;
-        if let Some(snapshot) = manifest.recordings.get(&uri)
+        if !self.manifest.recordings.contains_key(&uri)
+            && self.manifest.recordings.len() >= MAX_RECORDINGS
+        {
+            return Err(RecordingError::DatasetLimit);
+        }
+        if let Some(snapshot) = self.manifest.recordings.get(&uri)
             && snapshot.lineage == lineage
         {
             return Ok(IngestResult {
@@ -169,7 +494,7 @@ impl RecordingDataset {
             return Err(RecordingError::SourceChanged);
         }
         let file_name = format!("{}.parquet", Uuid::new_v4());
-        let snapshot_path = self.root.join(&file_name);
+        let snapshot_path = self.dataset.root.join(&file_name);
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -177,10 +502,13 @@ impl RecordingDataset {
         let sync_file = file.try_clone()?;
         let batch = transcript_batch(&rows)?;
         let mut writer = ArrowWriter::try_new(file, batch.schema(), None)?;
+        self.dataset.checkpoint(PublicationStage::SnapshotWrite)?;
         writer.write(&batch)?;
         writer.close()?;
+        self.dataset.checkpoint(PublicationStage::SnapshotSync)?;
         sync_file.sync_all()?;
-        manifest.recordings.insert(
+        let mut next = self.manifest.clone();
+        next.recordings.insert(
             uri,
             Snapshot {
                 file: file_name,
@@ -188,13 +516,23 @@ impl RecordingDataset {
                 segments: rows.len(),
             },
         );
-        self.publish(&manifest)?;
+        self.commit(next)?;
         Ok(IngestResult {
             reused: false,
             segments: rows.len(),
         })
     }
 
+    fn commit(&mut self, next: Manifest) -> Result<(), RecordingError> {
+        let result = self.dataset.publish(&next, Some(&self.manifest));
+        if result.is_ok() || matches!(result, Err(RecordingError::DurabilityUncertain(_))) {
+            self.manifest = next;
+        }
+        result
+    }
+}
+
+impl RecordingDataset {
     /// Pins the manifest's current files. Orphaned and replaced snapshots are
     /// intentionally retained so existing lazy plans cannot lose their inputs.
     pub async fn register(
@@ -202,11 +540,15 @@ impl RecordingDataset {
         session: &lakeprism_datafusion::MediaSession,
         table: &str,
     ) -> Result<(), RecordingError> {
+        let lease = Arc::new(self.lock_readers(false)?);
         let manifest = self.load()?;
         if manifest.recordings.is_empty() {
             session.register_table_provider(
                 table,
-                Arc::new(MemTable::try_new(transcript_schema(), vec![vec![]])?),
+                Arc::new(crate::recording_reader::SnapshotTable::new(
+                    Arc::new(MemTable::try_new(transcript_schema(), vec![vec![]])?),
+                    lease,
+                )),
             )?;
         } else {
             let paths = manifest
@@ -218,28 +560,50 @@ impl RecordingDataset {
                         .map_err(|_| RecordingError::UnsafePath)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let context = SessionContext::new();
+            let context = SessionContext::new_with_config(SessionConfig::new().set_bool(
+                "datafusion.execution.parquet.schema_force_view_types",
+                false,
+            ));
             let provider = context
-                .read_parquet(paths, ParquetReadOptions::default())
+                .read_parquet(
+                    paths,
+                    ParquetReadOptions::default().schema(transcript_schema().as_ref()),
+                )
                 .await?
                 .into_view();
-            session.register_table_provider(table, provider)?;
+            session.register_table_provider(
+                table,
+                Arc::new(crate::recording_reader::SnapshotTable::new(provider, lease)),
+            )?;
         }
         Ok(())
     }
 
     fn load(&self) -> Result<Manifest, RecordingError> {
-        let path = self.root.join("manifest.json");
+        self.read_manifest("manifest.json")
+    }
+
+    fn read_manifest(&self, name: &str) -> Result<Manifest, RecordingError> {
+        let path = self.root.join(name);
         reject_symlink(&path)?;
         let file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Manifest::default());
+                return Err(RecordingError::MissingManifest);
             }
             Err(error) => return Err(error.into()),
         };
-        let manifest: Manifest = serde_json::from_reader(file)?;
-        if manifest.format_version != FORMAT_VERSION {
+        if file.metadata()?.len() > MAX_MANIFEST_BYTES {
+            return Err(RecordingError::InvalidManifest);
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_MANIFEST_BYTES + 1).read_to_end(&mut bytes)?;
+        let version: ManifestVersion = serde_json::from_slice(&bytes)?;
+        if version.format_version != FORMAT_VERSION {
+            return Err(RecordingError::UnsupportedVersion(version.format_version));
+        }
+        let manifest: Manifest = serde_json::from_slice(&bytes)?;
+        if manifest.recordings.len() > MAX_RECORDINGS {
             return Err(RecordingError::InvalidManifest);
         }
         for (uri, snapshot) in &manifest.recordings {
@@ -259,24 +623,89 @@ impl RecordingDataset {
             if !path.is_file() {
                 return Err(RecordingError::InvalidManifest);
             }
+            let reader = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)
+                .map_err(|_| RecordingError::InvalidManifest)?;
+            if reader.schema().as_ref() != transcript_schema().as_ref()
+                || reader.metadata().file_metadata().num_rows() != snapshot.segments as i64
+            {
+                return Err(RecordingError::InvalidManifest);
+            }
         }
         Ok(manifest)
     }
 
-    fn publish(&self, manifest: &Manifest) -> Result<(), RecordingError> {
+    fn publish(
+        &self,
+        manifest: &Manifest,
+        previous: Option<&Manifest>,
+    ) -> Result<(), RecordingError> {
+        if let Some(previous) = previous {
+            self.write_manifest("manifest.previous.json", previous, true)?;
+            sync_directory(&self.root)?;
+        }
+        self.write_manifest("manifest.json", manifest, false)?;
+        self.checkpoint(PublicationStage::DirectorySync)
+            .and_then(|()| sync_directory(&self.root))
+            .map_err(|error| match error {
+                RecordingError::Io(error) => RecordingError::DurabilityUncertain(error),
+                other => other,
+            })?;
+        Ok(())
+    }
+
+    fn write_manifest(
+        &self,
+        name: &str,
+        manifest: &Manifest,
+        backup: bool,
+    ) -> Result<(), RecordingError> {
+        if manifest.recordings.len() > MAX_RECORDINGS {
+            return Err(RecordingError::DatasetLimit);
+        }
+        let bytes = serde_json::to_vec(manifest)?;
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+            return Err(RecordingError::DatasetLimit);
+        }
+        reject_symlink(&self.root.join(name))?;
         let temporary = self.root.join(format!(".manifest-{}.tmp", Uuid::new_v4()));
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)?;
-        file.write_all(&serde_json::to_vec(manifest)?)?;
+        self.checkpoint(if backup {
+            PublicationStage::BackupWrite
+        } else {
+            PublicationStage::ManifestWrite
+        })?;
+        file.write_all(&bytes)?;
+        self.checkpoint(if backup {
+            PublicationStage::BackupSync
+        } else {
+            PublicationStage::ManifestSync
+        })?;
         file.sync_all()?;
         drop(file);
-        fs::rename(temporary, self.root.join("manifest.json"))?;
-        #[cfg(unix)]
-        File::open(&self.root)?.sync_all()?;
+        self.checkpoint(if backup {
+            PublicationStage::BackupRename
+        } else {
+            PublicationStage::ManifestRename
+        })?;
+        fs::rename(temporary, self.root.join(name))?;
         Ok(())
     }
+}
+
+fn snapshot_file_name(name: &str) -> bool {
+    name.strip_suffix(".parquet")
+        .is_some_and(|stem| Uuid::parse_str(stem).is_ok())
+}
+
+fn sync_directory(root: &Path) -> Result<(), RecordingError> {
+    #[cfg(unix)]
+    File::open(root)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = root;
+    Ok(())
 }
 
 fn reject_symlink(path: &Path) -> Result<(), RecordingError> {
@@ -551,7 +980,342 @@ mod tests {
         .unwrap();
         assert!(matches!(
             fixture.dataset_result(),
-            Err(RecordingError::InvalidManifest)
+            Err(RecordingError::UnsupportedVersion(999))
+        ));
+    }
+
+    const FAULT_STAGES: [PublicationStage; 9] = [
+        PublicationStage::SnapshotWrite,
+        PublicationStage::SnapshotSync,
+        PublicationStage::BackupWrite,
+        PublicationStage::BackupSync,
+        PublicationStage::BackupRename,
+        PublicationStage::ManifestWrite,
+        PublicationStage::ManifestSync,
+        PublicationStage::ManifestRename,
+        PublicationStage::DirectorySync,
+    ];
+
+    #[tokio::test]
+    async fn vacuum_respects_lazy_plans_physical_plans_and_detached_streams() {
+        let fixture = Fixture::new();
+        let calls = AtomicUsize::new(0);
+        let dataset = fixture.dataset();
+        let source = fixture.0.join("source.wav");
+        dataset
+            .ingest(&source, lineage("v1"), &FixtureProvider(&calls))
+            .unwrap();
+        let physical = {
+            let session = lakeprism_datafusion::MediaSession::new();
+            dataset.register(&session, "transcripts").await.unwrap();
+            let dataframe = session.sql("SELECT text FROM transcripts").await.unwrap();
+            assert!(matches!(dataset.vacuum(), Err(RecordingError::ReadersBusy)));
+            dataframe.create_physical_plan().await.unwrap()
+        };
+        dataset
+            .ingest(&source, lineage("v2"), &FixtureProvider(&calls))
+            .unwrap();
+        let uri = dataset.recordings().unwrap()[0].source_uri.clone();
+        assert!(dataset.remove(&uri).unwrap());
+        assert!(!dataset.remove(&uri).unwrap());
+        assert!(dataset.recordings().unwrap().is_empty());
+        assert!(matches!(dataset.vacuum(), Err(RecordingError::ReadersBusy)));
+        let stream = physical
+            .execute(0, Arc::new(datafusion::execution::TaskContext::default()))
+            .unwrap();
+        drop(physical);
+        assert!(matches!(dataset.vacuum(), Err(RecordingError::ReadersBusy)));
+        use futures::TryStreamExt;
+        let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+        let text = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(text.value(0), "v1");
+        let vacuum = dataset.vacuum().unwrap();
+        assert_eq!(vacuum.removed_files, 1);
+        assert!(vacuum.reclaimed_bytes > 0);
+        let previous = dataset.read_manifest("manifest.previous.json").unwrap();
+        assert_eq!(
+            previous
+                .recordings
+                .values()
+                .next()
+                .unwrap()
+                .lineage
+                .operator_version,
+            "v2"
+        );
+    }
+
+    #[test]
+    fn vacuum_only_removes_unreferenced_owned_files() {
+        let fixture = Fixture::new();
+        let dataset = fixture.dataset();
+        let snapshot = format!("{}.parquet", Uuid::new_v4());
+        let temporary = format!(".manifest-{}.tmp", Uuid::new_v4());
+        fs::write(dataset.root.join(&snapshot), b"orphan").unwrap();
+        fs::write(dataset.root.join(&temporary), b"partial").unwrap();
+        fs::write(dataset.root.join("notes.txt"), b"keep").unwrap();
+        fs::write(dataset.root.join("custom.parquet"), b"keep").unwrap();
+        let result = dataset.vacuum().unwrap();
+        assert_eq!(
+            result,
+            VacuumResult {
+                removed_files: 2,
+                reclaimed_bytes: 13
+            }
+        );
+        assert!(dataset.root.join("notes.txt").is_file());
+        assert!(dataset.root.join("custom.parquet").is_file());
+    }
+
+    #[test]
+    fn managed_inputs_are_rejected_and_legacy_inputs_cannot_be_vacuumed() {
+        let fixture = Fixture::new();
+        let dataset = fixture.dataset();
+        let source = dataset.root.join(format!("{}.parquet", Uuid::new_v4()));
+        fs::write(&source, b"legacy input").unwrap();
+        let calls = AtomicUsize::new(0);
+        let provider = FixtureProvider(&calls);
+        assert!(matches!(
+            dataset.ingest(&source, lineage("v1"), &provider),
+            Err(RecordingError::InvalidSource)
+        ));
+        let uri = url::Url::from_file_path(&source).unwrap().to_string();
+        let mut legacy_lineage = lineage("v1");
+        legacy_lineage.source.media_uri = uri.clone();
+        legacy_lineage.source.source_version = fingerprint(&source).unwrap();
+        let rows = provider
+            .transcribe(&TranscriptionRequest {
+                media: MediaRef::new(uri.clone(), "audio", StorageMode::External).unwrap(),
+                lineage: legacy_lineage.clone(),
+                start_millis: 0,
+                end_millis: u64::MAX,
+                max_segments: MAX_SEGMENTS,
+            })
+            .unwrap();
+        let batch = transcript_batch(&rows).unwrap();
+        let snapshot = format!("{}.parquet", Uuid::new_v4());
+        let mut writer = ArrowWriter::try_new(
+            File::create(dataset.root.join(&snapshot)).unwrap(),
+            batch.schema(),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let mut legacy = Manifest::default();
+        legacy.recordings.insert(
+            uri.clone(),
+            Snapshot {
+                file: snapshot,
+                lineage: legacy_lineage,
+                segments: 1,
+            },
+        );
+        dataset.publish(&legacy, None).unwrap();
+        assert!(matches!(dataset.vacuum(), Err(RecordingError::UnsafePath)));
+        assert!(matches!(
+            dataset.remove(&uri),
+            Err(RecordingError::UnsafePath)
+        ));
+        assert_eq!(fs::read(&source).unwrap(), b"legacy input");
+        let moved = fixture.0.join("moved-input.parquet");
+        fs::rename(source, &moved).unwrap();
+        assert!(dataset.remove(&uri).unwrap());
+        dataset.vacuum().unwrap();
+        assert_eq!(fs::read(moved).unwrap(), b"legacy input");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vacuum_never_follows_managed_file_symlinks() {
+        let fixture = Fixture::new();
+        let dataset = fixture.dataset();
+        let source = fixture.0.join("source.wav");
+        std::os::unix::fs::symlink(
+            &source,
+            dataset.root.join(format!("{}.parquet", Uuid::new_v4())),
+        )
+        .unwrap();
+        assert!(matches!(dataset.vacuum(), Err(RecordingError::UnsafePath)));
+        assert_eq!(fs::read(source).unwrap(), b"fixture audio");
+    }
+
+    #[test]
+    fn storage_failures_preserve_complete_publication_and_batch_state() {
+        for stage in FAULT_STAGES {
+            let fixture = Fixture::new();
+            let calls = AtomicUsize::new(0);
+            let provider = FixtureProvider(&calls);
+            let source = fixture.0.join("source.wav");
+            let mut dataset = fixture.dataset();
+            dataset.ingest(&source, lineage("v1"), &provider).unwrap();
+            let fail_once = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            dataset.fault = Some(Arc::new(move |current| {
+                if current == stage && fail_once.swap(false, Ordering::SeqCst) {
+                    Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+                } else {
+                    Ok(())
+                }
+            }));
+            let mut writer = dataset.writer().unwrap();
+            let error = writer
+                .ingest(&source, lineage("v2"), &provider)
+                .unwrap_err();
+            let published = stage == PublicationStage::DirectorySync;
+            assert_eq!(error.published(), published, "{stage:?}: {error}");
+            let manifest = fixture.dataset().load().unwrap();
+            assert_eq!(
+                manifest
+                    .recordings
+                    .values()
+                    .next()
+                    .unwrap()
+                    .lineage
+                    .operator_version,
+                if published { "v2" } else { "v1" },
+                "{stage:?}",
+            );
+            assert_eq!(
+                writer
+                    .ingest(&source, lineage("v2"), &provider)
+                    .unwrap()
+                    .reused,
+                published,
+                "failed writes must never become warm-reuse entries: {stage:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn crash_publication_child() {
+        let Ok(root) = std::env::var("LAKEPRISM_RECORDING_CRASH_ROOT") else {
+            return;
+        };
+        let stage = std::env::var("LAKEPRISM_RECORDING_CRASH_STAGE").unwrap();
+        let mut dataset = RecordingDataset::open(&root).unwrap();
+        dataset.fault = Some(Arc::new(move |current| {
+            if format!("{current:?}") == stage {
+                std::process::exit(86);
+            }
+            Ok(())
+        }));
+        let calls = AtomicUsize::new(0);
+        let source = Path::new(&root).parent().unwrap().join("source.wav");
+        dataset
+            .ingest(&source, lineage("v2"), &FixtureProvider(&calls))
+            .unwrap();
+        panic!("requested crash boundary was not reached");
+    }
+
+    #[test]
+    fn process_death_at_every_publication_boundary_reopens_complete_snapshots() {
+        for stage in FAULT_STAGES {
+            let fixture = Fixture::new();
+            let calls = AtomicUsize::new(0);
+            let dataset = fixture.dataset();
+            dataset
+                .ingest(
+                    &fixture.0.join("source.wav"),
+                    lineage("v1"),
+                    &FixtureProvider(&calls),
+                )
+                .unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "recordings::tests::crash_publication_child"])
+                .env("LAKEPRISM_RECORDING_CRASH_ROOT", dataset.root())
+                .env("LAKEPRISM_RECORDING_CRASH_STAGE", format!("{stage:?}"))
+                .output()
+                .unwrap();
+            assert_eq!(status.status.code(), Some(86), "{stage:?}");
+            let reopened = fixture.dataset();
+            let manifest = reopened.load().unwrap();
+            assert_eq!(
+                manifest
+                    .recordings
+                    .values()
+                    .next()
+                    .unwrap()
+                    .lineage
+                    .operator_version,
+                if stage == PublicationStage::DirectorySync {
+                    "v2"
+                } else {
+                    "v1"
+                },
+                "{stage:?}",
+            );
+            drop(reopened.writer().unwrap());
+        }
+    }
+
+    #[test]
+    fn explicit_recovery_uses_the_previous_commit_not_orphan_files_or_future_versions() {
+        let fixture = Fixture::new();
+        let calls = AtomicUsize::new(0);
+        let dataset = fixture.dataset();
+        let source = fixture.0.join("source.wav");
+        dataset
+            .ingest(&source, lineage("v1"), &FixtureProvider(&calls))
+            .unwrap();
+        dataset
+            .ingest(&source, lineage("v2"), &FixtureProvider(&calls))
+            .unwrap();
+        fs::remove_file(dataset.root.join("manifest.json")).unwrap();
+        assert!(matches!(
+            fixture.dataset_result(),
+            Err(RecordingError::MissingManifest)
+        ));
+        let recovered = RecordingDataset::recover(dataset.root()).unwrap();
+        assert_eq!(
+            recovered,
+            RecoveryResult {
+                restored: true,
+                recordings: 1
+            }
+        );
+        assert_eq!(
+            fixture
+                .dataset()
+                .load()
+                .unwrap()
+                .recordings
+                .values()
+                .next()
+                .unwrap()
+                .lineage
+                .operator_version,
+            "v1",
+        );
+        let future = br#"{"format_version":2,"recordings":{},"future_field":true}"#;
+        fs::write(dataset.root.join("manifest.json"), future).unwrap();
+        assert!(matches!(
+            RecordingDataset::recover(dataset.root()),
+            Err(RecordingError::UnsupportedVersion(2))
+        ));
+        assert_eq!(
+            fs::read(dataset.root.join("manifest.json")).unwrap(),
+            future
+        );
+
+        let orphan = Fixture::new();
+        let root = orphan.0.join("dataset");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join(format!("{}.parquet", Uuid::new_v4())),
+            b"partial file",
+        )
+        .unwrap();
+        assert!(matches!(
+            RecordingDataset::open(&root),
+            Err(RecordingError::MissingManifest)
+        ));
+        assert!(matches!(
+            RecordingDataset::recover(&root),
+            Err(RecordingError::MissingManifest)
         ));
     }
 

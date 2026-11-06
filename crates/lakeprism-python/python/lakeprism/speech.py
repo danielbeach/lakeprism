@@ -89,7 +89,7 @@ class SpeechModel:
             max_input_bytes=1024 * 1024 * 1024,
             max_output_bytes=8 * 1024 * 1024,
             timeout_seconds=7200,
-            operator_version="lakeprism-speech-v2",
+            operator_version="lakeprism-speech-v3",
             model=MODEL_ID,
             model_version="sha256:" + fingerprint,
             parameters={

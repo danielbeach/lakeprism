@@ -10,8 +10,10 @@ delta-rs = ["dep:lakeprism-delta"]
 
 [dependencies]
 arrow.workspace = true
+async-trait.workspace = true
 datafusion.workspace = true
 fs2.workspace = true
+futures.workspace = true
 lakeprism-arrow = { path = "../lakeprism-arrow" }
 lakeprism-core = { path = "../lakeprism-core" }
 lakeprism-datafusion = { path = "../lakeprism-datafusion" }

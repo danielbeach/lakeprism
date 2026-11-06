@@ -82,6 +82,10 @@ def transcribe(input_path, model_artifact):
             audio = np.frombuffer(row["f32le"], dtype="<f4")
         except ValueError as error:
             raise SpeechFailure("decode_failed") from error
+        if not audio.size:
+            raise SpeechFailure("decode_failed")
+        if not np.any(audio):
+            continue
         try:
             segments, _ = model.transcribe(
                 audio, language="en", beam_size=1, vad_filter=False,

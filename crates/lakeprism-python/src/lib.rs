@@ -23,6 +23,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
+pyo3::create_exception!(_lakeprism, RecordingError, PyRuntimeError);
+
+fn recording_error(error: lakeprism_derived::recordings::RecordingError) -> PyErr {
+    Python::attach(|py| {
+        let exception = RecordingError::new_err(error.to_string());
+        let attach = || -> PyResult<()> {
+            exception.value(py).setattr("code", error.code())?;
+            exception
+                .value(py)
+                .setattr("published", error.published())?;
+            Ok(())
+        };
+        match attach() {
+            Ok(()) => exception,
+            Err(error) => error,
+        }
+    })
+}
+
 #[cfg(feature = "native-media")]
 pyo3::create_exception!(_lakeprism, UnsupportedMediaError, PyRuntimeError);
 
@@ -124,7 +143,7 @@ impl PythonRecordingDataset {
     fn new(path: &str) -> PyResult<Self> {
         Ok(Self {
             inner: lakeprism_derived::recordings::RecordingDataset::open(path)
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?,
+                .map_err(recording_error)?,
         })
     }
 
@@ -134,12 +153,17 @@ impl PythonRecordingDataset {
     }
 
     #[cfg(feature = "whisper-subprocess")]
-    fn ingest_file(
+    fn ingest_files(
         &self,
         py: Python<'_>,
-        path: &str,
+        paths: Vec<String>,
         config: PyRef<'_, PythonWhisperSubprocessConfig>,
-    ) -> PyResult<(bool, usize)> {
+    ) -> PyResult<Vec<Py<PyDict>>> {
+        if paths.is_empty() || paths.len() > 10_000 {
+            return Err(PyValueError::new_err(
+                "one ingestion must select 1..10000 recordings",
+            ));
+        }
         let config = config.inner.clone();
         let governor = Arc::new(
             lakeprism_storage::ExecutionGovernor::new(
@@ -163,10 +187,19 @@ impl PythonRecordingDataset {
                 .map_err(|error| PyValueError::new_err(error.to_string()))?,
             control: control.clone(),
         };
-        std::thread::scope(|scope| {
+        let outcomes = std::thread::scope(|scope| {
             let worker = scope.spawn(|| {
-                self.inner
-                    .ingest(std::path::Path::new(path), lineage, &provider)
+                let mut writer = self.inner.writer()?;
+                let mut outcomes = Vec::with_capacity(paths.len());
+                for path in paths {
+                    if control.state() != lakeprism_storage::QueryControlState::Active {
+                        break;
+                    }
+                    let result =
+                        writer.ingest(std::path::Path::new(&path), lineage.clone(), &provider);
+                    outcomes.push((path, result));
+                }
+                Ok::<_, lakeprism_derived::recordings::RecordingError>(outcomes)
             });
             while !worker.is_finished() {
                 if let Err(interrupt) = py.check_signals() {
@@ -178,11 +211,65 @@ impl PythonRecordingDataset {
                 }
                 py.detach(|| std::thread::sleep(Duration::from_millis(25)));
             }
-            let result = worker
+            worker
                 .join()
                 .map_err(|_| PyRuntimeError::new_err("recording worker panicked"))?
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
-            Ok((result.reused, result.segments))
+                .map_err(recording_error)
+        })?;
+        outcomes
+            .into_iter()
+            .map(|(path, result)| {
+                let row = PyDict::new(py);
+                row.set_item("path", path)?;
+                match result {
+                    Ok(result) => {
+                        row.set_item("status", if result.reused { "reused" } else { "written" })?;
+                        row.set_item("segments", result.segments)?;
+                    }
+                    Err(error) => {
+                        row.set_item("status", "failed")?;
+                        row.set_item("error", error.to_string())?;
+                        row.set_item("error_code", error.code())?;
+                        row.set_item("published", error.published())?;
+                    }
+                }
+                Ok(row.unbind())
+            })
+            .collect()
+    }
+
+    fn recordings(&self, py: Python<'_>) -> PyResult<Vec<(String, String, usize)>> {
+        py.detach(|| {
+            self.inner
+                .recordings()
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| (row.source_uri, row.source_version, row.segments))
+                        .collect()
+                })
+                .map_err(recording_error)
+        })
+    }
+
+    fn remove(&self, py: Python<'_>, uri: &str) -> PyResult<bool> {
+        py.detach(|| self.inner.remove(uri).map_err(recording_error))
+    }
+
+    fn vacuum(&self, py: Python<'_>) -> PyResult<(usize, u64)> {
+        py.detach(|| {
+            self.inner
+                .vacuum()
+                .map(|result| (result.removed_files, result.reclaimed_bytes))
+                .map_err(recording_error)
+        })
+    }
+
+    #[staticmethod]
+    fn recover(py: Python<'_>, path: &str) -> PyResult<(bool, usize)> {
+        py.detach(|| {
+            lakeprism_derived::recordings::RecordingDataset::recover(path)
+                .map(|result| (result.restored, result.recordings))
+                .map_err(recording_error)
         })
     }
 
@@ -192,7 +279,7 @@ impl PythonRecordingDataset {
             session
                 .runtime
                 .block_on(self.inner.register(&session.inner, "transcripts"))
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                .map_err(recording_error)?;
             Ok(session)
         })
     }
@@ -1633,6 +1720,7 @@ impl PythonLazyPlan {
             schema: stream.schema(),
             stream,
             runtime: Arc::clone(&self.runtime),
+            _session: Arc::clone(&self.session),
         };
         let ffi_stream = arrow::ffi_stream::FFI_ArrowArrayStream::new(Box::new(reader));
         arrow_stream_capsule(py, ffi_stream)
@@ -1729,6 +1817,7 @@ struct QueryStreamReader {
     schema: arrow::datatypes::SchemaRef,
     stream: datafusion::physical_plan::SendableRecordBatchStream,
     runtime: Arc<Runtime>,
+    _session: Arc<MediaSession>,
 }
 
 impl Iterator for QueryStreamReader {
@@ -2102,6 +2191,7 @@ fn plan_video_frames(
 
 #[pymodule]
 fn _lakeprism(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("RecordingError", module.py().get_type::<RecordingError>())?;
     #[cfg(feature = "native-media")]
     module.add(
         "UnsupportedMediaError",

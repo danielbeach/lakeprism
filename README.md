@@ -13,6 +13,11 @@ See [Release readiness](#release-readiness) for validated capabilities and limit
 [local recording-to-SQL workflow](examples/local_transcription/README.md),
 including persistent transcripts, unchanged reuse, and explicit model preparation.
 
+**1.0 candidate work:** explicit recovery/removal/vacuum, reader-safe retention,
+batched refresh, stable transcript Arrow types, alpha-format reopening, and
+digital-silence protection are implemented in source, not published `0.1.0a2`.
+See the [local recording contract](docs/LOCAL_RECORDINGS_CONTRACT.md).
+
 ## Install
 
 Install the explicit alpha version:
@@ -93,6 +98,27 @@ implicit removal of deleted sources, and resume within a recording are not
 implemented. Use an application-owned local dataset directory, not a shared
 or remote filesystem. See the [runnable real-model example](examples/local_transcription/README.md)
 and [1.0 acceptance contract](docs/ACCEPTANCE_MATRIX.md#local-product-10-acceptance).
+
+### Dataset maintenance (unreleased candidate)
+
+Keep original recordings outside the dataset directory. Removal never deletes
+the input; vacuum requires all dataset sessions, plans and Arrow readers to
+be closed/dropped and retains one previous committed recovery generation.
+
+```python
+print(dataset.recordings())
+dataset.remove("./recordings/obsolete.wav")
+print(dataset.vacuum())  # removed_files / reclaimed_bytes
+
+# Only for a missing/damaged active manifest; never automatic rollback.
+print(RecordingDataset.recover("./interview-index"))
+```
+
+`RecordingError.code` and `.published` distinguish ordinary failure from a
+visible commit whose final durability sync failed. Failed ingestion entries
+also expose `error_code` and `published`. Preserve a damaged directory and
+inspect these fields before retrying. Full semantics and upgrade commitments
+are in the [candidate contract](docs/LOCAL_RECORDINGS_CONTRACT.md).
 
 ## Start with Python
 

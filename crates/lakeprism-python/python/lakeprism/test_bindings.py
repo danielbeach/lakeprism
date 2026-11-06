@@ -1,4 +1,6 @@
 import base64
+import gc
+import hashlib
 import json
 import math
 import os
@@ -442,6 +444,9 @@ def test_recording_dataset_folder_reuse_refresh_and_partial_failure(tmp_path):
     with pytest.raises(lakeprism.IngestionError) as failed:
         reopened.ingest(recordings, model=model)
     assert {row["status"] for row in failed.value.results} == {"failed", "written"}
+    error = next(row for row in failed.value.results if row["status"] == "failed")
+    assert error["error_code"] == "child_failed"
+    assert error["published"] is False
     assert len(reopened.search("country").collect()) == 2
     source.write_bytes(b"updated")
     assert reopened.ingest(recordings, model=model)[0]["status"] == "reused"
@@ -458,6 +463,170 @@ def test_recording_dataset_empty_search_and_invalid_selection(tmp_path):
     empty.mkdir()
     with pytest.raises(ValueError, match="no supported"):
         dataset.ingest(empty, model=None)
+
+
+@pytest.fixture
+def recorded_dataset(tmp_path):
+    if not hasattr(lakeprism, "WhisperSubprocessConfig"):
+        pytest.skip("Whisper subprocess support was not compiled")
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"fixture")
+    artifact = tmp_path / "model.bin"
+    artifact.write_bytes(b"fixture model")
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        "import json, pathlib, sys\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps({'segments': ["
+        "{'start_millis': 0, 'end_millis': 500, 'text': sys.argv[4]}]}))\n"
+    )
+
+    class FixtureModel:
+        version = "1"
+
+        def configuration(self, staging):
+            return lakeprism.WhisperSubprocessConfig(
+                sys.executable, [str(adapter), "{input}", "{output}", "{model}", self.version],
+                str(artifact), str(staging), operator_version="fixture",
+                model="fixture", model_version=self.version,
+            )
+
+    dataset = lakeprism.RecordingDataset(tmp_path / "dataset [literal]")
+    model = FixtureModel()
+    dataset.ingest(source, model=model)
+    return dataset, source, model
+
+
+def test_recording_dataset_remove_vacuum_and_detached_arrow_readers(recorded_dataset):
+    pa = pytest.importorskip("pyarrow")
+    dataset, source, model = recorded_dataset
+    table = dataset.session().plan("SELECT * FROM transcripts").to_pyarrow().read_all()
+    assert table.schema == pa.schema([
+        pa.field("source_uri", pa.string(), nullable=False),
+        pa.field("source_version", pa.string(), nullable=False),
+        pa.field("start_millis", pa.uint64(), nullable=False),
+        pa.field("end_millis", pa.uint64(), nullable=False),
+        pa.field("text", pa.string(), nullable=False),
+        pa.field("confidence_millis", pa.uint16()),
+        pa.field("operator_version", pa.string(), nullable=False),
+        pa.field("model", pa.string()),
+        pa.field("model_version", pa.string()),
+        pa.field("parameters_json", pa.string(), nullable=False),
+    ])
+    records = dataset.recordings()
+    assert records == [{
+        "source_uri": source.resolve().as_uri(),
+        "source_version": "sha256:" + hashlib.sha256(b"fixture").hexdigest(),
+        "segments": 1,
+    }]
+    pinned = dataset.search("1")
+    model.version = "2"
+    dataset.ingest(source, model=model)
+    assert dataset.remove(source)
+    assert not dataset.remove(source)
+    assert source.is_file()
+    with pytest.raises(lakeprism.RecordingError) as busy:
+        dataset.vacuum()
+    assert busy.value.code == "readers_busy"
+    assert busy.value.published is False
+    reader = pinned.to_pyarrow()
+    del pinned
+    gc.collect()
+    with pytest.raises(lakeprism.RecordingError, match="readers"):
+        dataset.vacuum()
+    assert reader.read_all().to_pylist()[0]["text"] == "1"
+    reader.close()
+    del reader
+    gc.collect()
+    result = dataset.vacuum()
+    assert result["removed_files"] == 1
+    assert result["reclaimed_bytes"] > 0
+    assert dataset.recordings() == []
+    assert dataset.search("anything").collect() == []
+
+
+def test_recording_dataset_recovery_validates_snapshots_and_never_downgrades(recorded_dataset):
+    dataset, source, model = recorded_dataset
+    model.version = "2"
+    dataset.ingest(source, model=model)
+    manifest_path = dataset.path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    snapshot = next(iter(manifest["recordings"].values()))["file"]
+    (dataset.path / snapshot).write_bytes(b"interrupted snapshot")
+    with pytest.raises(lakeprism.RecordingError) as invalid:
+        lakeprism.RecordingDataset(dataset.path)
+    assert invalid.value.code == "invalid_manifest"
+    assert lakeprism.RecordingDataset.recover(dataset.path) == {"restored": True, "recordings": 1}
+    reopened = lakeprism.RecordingDataset(dataset.path)
+    assert reopened.search("1").collect()[0]["text"] == "1"
+    future = '{"format_version":2,"recordings":{},"future":true}'
+    manifest_path.write_text(future)
+    with pytest.raises(lakeprism.RecordingError) as invalid:
+        lakeprism.RecordingDataset.recover(dataset.path)
+    assert invalid.value.code == "unsupported_manifest_version"
+    assert manifest_path.read_text() == future
+
+
+def test_recording_dataset_opens_published_alpha_without_rewriting(tmp_path):
+    import base64
+    import zlib
+
+    pytest.importorskip("pyarrow")
+    # Original manifest and Parquet bytes produced by unmodified PyPI 0.1.0a2.
+    fixture = json.loads(zlib.decompress(base64.b64decode(
+        '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'
+        'Zg=='
+    )))
+    root = tmp_path / "imported alpha"
+    root.mkdir()
+    manifest = fixture["manifest"]
+    snapshot = next(iter(manifest["recordings"].values()))
+    (root / snapshot["file"]).write_bytes(base64.b64decode(fixture["parquet_base64"]))
+    manifest_path = root / "manifest.json"
+    manifest_bytes = json.dumps(manifest).encode()
+    manifest_path.write_bytes(manifest_bytes)
+    dataset = lakeprism.RecordingDataset(root)
+    assert manifest_path.read_bytes() == manifest_bytes
+    assert dataset.search("legacy").collect()[0]["text"] == "legacy alpha transcript"
+    uri = next(iter(manifest["recordings"]))
+    assert dataset.remove(uri)
+    assert dataset.recordings() == []
+    assert lakeprism.RecordingDataset.recover(root) == {"restored": False, "recordings": 0}
 
 
 @pytest.mark.parametrize("payload,exit_code,expected", [
@@ -543,7 +712,8 @@ def test_speech_adapter_reports_only_fixed_failure_categories(monkeypatch, tmp_p
 
 
 @pytest.mark.parametrize("audio_end", [8000, None])
-def test_speech_adapter_preserves_offsets_and_accepts_audio_before_video_end(monkeypatch, tmp_path, audio_end):
+@pytest.mark.parametrize("silent", [False, True])
+def test_speech_adapter_preserves_offsets_and_skips_digital_silence(monkeypatch, tmp_path, audio_end, silent):
     from types import SimpleNamespace
     from lakeprism import _speech_adapter, _lakeprism
 
@@ -563,12 +733,19 @@ def test_speech_adapter_preserves_offsets_and_accepts_audio_before_video_end(mon
         audio_segments=lambda uri, start, *args, **kwargs: plan if start == 0 else empty_plan,
     )
     segment = SimpleNamespace(start=0.25, end=1.0, text="fixture speech")
-    model = SimpleNamespace(transcribe=lambda *args, **kwargs: ([segment], None))
+    def transcribe(*args, **kwargs):
+        assert not silent, "digital silence must not enter the speech model"
+        return [segment], None
+
+    model = SimpleNamespace(transcribe=transcribe)
     monkeypatch.setattr(_lakeprism, "MediaSession", lambda: session)
-    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(frombuffer=lambda *args, **kwargs: None))
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(
+        frombuffer=lambda *args, **kwargs: SimpleNamespace(size=1),
+        any=lambda audio: not silent,
+    ))
     monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=lambda *args, **kwargs: model))
     result = _speech_adapter.transcribe(tmp_path / "input.mp4", tmp_path / "model.bin")
-    assert result == {"segments": [{
+    assert result == {"segments": [] if silent else [{
         "start_millis": 5250, "end_millis": 6000, "text": "fixture speech",
         "confidence_millis": None,
     }]}
@@ -596,7 +773,6 @@ def test_python_native_audio_seek_preserves_late_window_samples(tmp_path):
     assert all(abs(sample - 0.125) < 1e-6 for sample in samples)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX child liveness assertion")
 def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tmp_path):
     if not hasattr(lakeprism, "WhisperSubprocessConfig"):
         pytest.skip("Whisper subprocess support was not compiled")
@@ -639,7 +815,27 @@ def test_recording_ingestion_interrupt_reaps_adapter_and_keeps_dataset_usable(tm
             dataset.ingest(source, model=FixtureModel())
     finally:
         interrupter.join()
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(marker.read_text()), 0)
+    pid = int(marker.read_text())
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE, never terminate.
+        if handle:
+            try:
+                assert kernel.WaitForSingleObject(handle, 0) == 0
+            finally:
+                kernel.CloseHandle(handle)
+        else:
+            assert ctypes.get_last_error() == 87  # ERROR_INVALID_PARAMETER: PID is gone.
+    else:
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
     assert list((dataset.path / "staging").iterdir()) == []
     assert dataset.search("anything").collect() == []

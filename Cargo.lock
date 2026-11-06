@@ -3440,8 +3440,10 @@ name = "lakeprism-derived"
 version = "0.1.0-alpha.2"
 dependencies = [
  "arrow",
+ "async-trait",
  "datafusion",
  "fs2",
+ "futures",
  "lakeprism-arrow",
  "lakeprism-core",
  "lakeprism-datafusion",

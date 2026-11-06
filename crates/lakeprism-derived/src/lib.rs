@@ -4,6 +4,7 @@
 //! read-only here: when enabled it delegates snapshot registration to delta-rs
 //! instead of attempting to emulate Delta transaction semantics.
 
+mod recording_reader;
 pub mod recordings;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ._lakeprism import _RecordingDataset
+from ._lakeprism import _RecordingDataset, RecordingError
 
 
 _RECORDINGS = {".wav", ".mp4", ".mov", ".m4a", ".mkv", ".webm"}
@@ -55,21 +55,56 @@ class RecordingDataset:
         staging = self.path / "staging"
         staging.mkdir(mode=0o700, exist_ok=True)
         config = model.configuration(staging)
-        results = []
-        for path in paths:
-            try:
-                reused, count = self._native.ingest_file(str(path), config)
-            except (RuntimeError, ValueError) as error:
-                results.append({"path": str(path), "status": "failed", "error": str(error)})
-            else:
-                results.append({
-                    "path": str(path),
-                    "status": "reused" if reused else "written",
-                    "segments": count,
-                })
+        try:
+            results = self._native.ingest_files([str(path) for path in paths], config)
+        except RecordingError as error:
+            results = [{
+                "path": str(path), "status": "failed", "error": str(error),
+                "error_code": error.code, "published": error.published,
+            } for path in paths]
         if any(row["status"] == "failed" for row in results):
             raise IngestionError(results)
         return results
+
+    def recordings(self):
+        """List canonical source URIs, content versions, and segment counts."""
+        return [
+            {"source_uri": uri, "source_version": version, "segments": count}
+            for uri, version, count in self._native.recordings()
+        ]
+
+    def remove(self, source):
+        """Remove a source without deleting its input or pinned snapshots.
+
+        Accept a local path (which may no longer exist) or an exact canonical
+        ``file://`` URI from ``recordings()``. Return whether it was present.
+        """
+        uri = (
+            source if isinstance(source, str) and source.startswith("file://")
+            else Path(source).expanduser().resolve().as_uri()
+        )
+        return self._native.remove(uri)
+
+    def vacuum(self):
+        """Reclaim unreferenced snapshots and interrupted manifest temporaries.
+
+        All dataset sessions, lazy plans, and Arrow readers must be dropped.
+        The active and previous manifests remain recoverable. Only reserved
+        UUID snapshots and manifest temporaries are eligible; inputs must be
+        outside this application-owned dataset directory.
+        """
+        count, size = self._native.vacuum()
+        return {"removed_files": count, "reclaimed_bytes": size}
+
+    @classmethod
+    def recover(cls, path):
+        """Restore the previous complete commit if the manifest is invalid.
+
+        No automatic rollback or orphan promotion occurs. A future format
+        version is never downgraded. Reopen normally after recovery.
+        """
+        restored, count = _RecordingDataset.recover(str(Path(path).expanduser().resolve()))
+        return {"restored": restored, "recordings": count}
 
     def session(self):
         """Pin current snapshots as the ``transcripts`` SQL table."""
