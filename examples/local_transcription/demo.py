@@ -112,11 +112,18 @@ def main():
         prepare(work)
     else:
         os.environ["HF_HUB_OFFLINE"] = "1"
-        if args.check_long_recording:
-            check_long_recording(work)
-        else:
-            run(work, args.input.resolve() if args.input else work / "sample.wav",
-                args.search, args.check_sample)
+        try:
+            if args.check_long_recording:
+                check_long_recording(work)
+            else:
+                run(work, args.input.resolve() if args.input else work / "sample.wav",
+                    args.search, args.check_sample)
+        except lakeprism.IngestionError as error:
+            failures = [
+                {"error_code": row["error_code"], "published": row["published"]}
+                for row in error.results if row["status"] == "failed"
+            ]
+            raise SystemExit(f"recording ingestion failed: {json.dumps(failures)}") from None
 
 
 if __name__ == "__main__":

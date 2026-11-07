@@ -1,0 +1,55 @@
+name: Windows wheel diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Run containing wheel-windows-x86_64; diagnostic only, never publishes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  speech:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-windows-x86_64
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+          path: dist/python
+      - uses: astral-sh/setup-uv@v6
+      - name: Install exact wheel and prepare licensed recording/model
+        id: prepare
+        shell: bash
+        run: |
+          uv venv --python 3.12 .diagnostic-venv
+          python=".diagnostic-venv/Scripts/python.exe"
+          wheels=(dist/python/*.whl)
+          test "${#wheels[@]}" -eq 1
+          uv pip install --python "$python" "${wheels[0]}[speech]"
+          "$python" examples/local_transcription/demo.py \
+            --prepare --work-dir target/local-transcription
+      - name: Diagnose direct adapter without hiding its exception chain
+        shell: bash
+        run: |
+          .diagnostic-venv/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          from lakeprism._speech_adapter import transcribe
+
+          work = Path("target/local-transcription").resolve()
+          result = transcribe(work / "sample.wav", work / "model/model.bin")
+          print(f"Direct adapter produced {len(result['segments'])} segments.")
+          PY
+      - name: Diagnose governed ingestion with structured failure codes
+        if: always() && steps.prepare.outcome == 'success'
+        shell: bash
+        run: |
+          .diagnostic-venv/Scripts/python.exe examples/local_transcription/demo.py \
+            --work-dir target/local-transcription --check-sample
