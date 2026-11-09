@@ -62,7 +62,7 @@ def run(work, source, search, check_sample=False):
     ).to_pyarrow().read_all()
     pq.write_table(table, snapshot)
     exported = lakeprism.MediaSession()
-    exported.register_parquet("transcripts", str(snapshot))
+    exported.register_parquet("transcripts", snapshot.as_uri())
     if exported.plan(dataset.search(search).sql).to_pyarrow().read_all().to_pylist() != hits:
         raise ValueError("exported Parquet search differs from the dataset")
     results = {
