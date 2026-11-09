@@ -49,6 +49,23 @@ def test_media_session_rejects_invalid_sql():
         lakeprism.MediaSession().execute("SELECT * FROM missing_table")
 
 
+@pytest.mark.parametrize("use_uri", [False, True])
+def test_local_parquet_registration_accepts_native_paths_and_file_uris(tmp_path, use_uri):
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    source = tmp_path / "transcripts.parquet"
+    pq.write_table(pa.table({"text": ["fixture transcript"]}), source)
+    session = lakeprism.MediaSession()
+    session.register_parquet(
+        "transcripts", source.as_uri() if use_uri else str(source),
+    )
+    assert session.plan("SELECT text FROM transcripts").collect() == [
+        {"text": "fixture transcript"},
+    ]
+    with pytest.raises(ValueError, match="only a local"):
+        session.register_parquet("remote", "https://example.test/transcripts.parquet")
+
+
 def test_media_session_exports_native_arrow_ipc():
     pa = pytest.importorskip("pyarrow")
     session = lakeprism.MediaSession()

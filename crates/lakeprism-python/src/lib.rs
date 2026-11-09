@@ -1903,6 +1903,9 @@ fn catalog_error(error: lakeprism_catalog::CatalogError) -> PyErr {
 }
 
 fn validate_local_path_or_file_uri(value: &str) -> PyResult<()> {
+    if std::path::Path::new(value).is_absolute() {
+        return Ok(());
+    }
     if let Ok(uri) = url::Url::parse(value)
         && uri.scheme() != "file"
     {
