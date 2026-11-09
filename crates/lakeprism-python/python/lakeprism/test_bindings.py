@@ -747,6 +747,7 @@ def test_canonical_windows_file_uris(path, uri):
 def test_speech_adapter_reads_canonical_staged_paths(monkeypatch, tmp_path):
     if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
         pytest.skip("requires native FFmpeg")
+    pytest.importorskip("pyarrow")
     from types import SimpleNamespace
     from lakeprism import _speech_adapter
 
