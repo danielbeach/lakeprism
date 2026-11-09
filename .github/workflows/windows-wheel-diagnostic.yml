@@ -7,6 +7,11 @@ on:
         description: Run containing wheel-windows-x86_64; diagnostic only, never publishes
         required: true
         type: string
+      overlay_python:
+        description: Overlay checked-out Python speech fixes; diagnostic only, never publishes
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -25,8 +30,7 @@ jobs:
           github-token: ${{ github.token }}
           path: dist/python
       - uses: astral-sh/setup-uv@v6
-      - name: Install exact wheel and prepare licensed recording/model
-        id: prepare
+      - name: Install exact wheel and speech dependencies
         shell: bash
         run: |
           uv venv --python 3.12 .diagnostic-venv
@@ -34,6 +38,26 @@ jobs:
           wheels=(dist/python/*.whl)
           test "${#wheels[@]}" -eq 1
           uv pip install --python "$python" "${wheels[0]}[speech]"
+      - name: Overlay checked-out Python fixes without replacing native code
+        if: inputs.overlay_python
+        shell: bash
+        run: |
+          .diagnostic-venv/Scripts/python.exe - <<'PY'
+          from pathlib import Path
+          import shutil
+          import lakeprism
+
+          package = Path(lakeprism.__file__).parent
+          source = Path("crates/lakeprism-python/python/lakeprism")
+          for name in ("_paths.py", "_speech_adapter.py", "recordings.py"):
+              shutil.copyfile(source / name, package / name)
+          print("Diagnostic Python overlay installed; native wheel code unchanged.")
+          PY
+      - name: Prepare licensed recording/model
+        id: prepare
+        shell: bash
+        run: |
+          python=".diagnostic-venv/Scripts/python.exe"
           "$python" examples/local_transcription/demo.py \
             --prepare --work-dir target/local-transcription
       - name: Diagnose direct adapter without hiding its exception chain
@@ -44,8 +68,10 @@ jobs:
           from lakeprism._speech_adapter import transcribe
 
           work = Path("target/local-transcription").resolve()
-          result = transcribe(work / "sample.wav", work / "model/model.bin")
-          print(f"Direct adapter produced {len(result['segments'])} segments.")
+          source = work / "sample.wav"
+          for label, path in (("normal", source), ("verbatim", Path("\\\\?\\" + str(source)))):
+              result = transcribe(path, work / "model/model.bin")
+              print(f"Direct adapter ({label}) produced {len(result['segments'])} segments.")
           PY
       - name: Diagnose governed ingestion with structured failure codes
         if: always() && steps.prepare.outcome == 'success'
