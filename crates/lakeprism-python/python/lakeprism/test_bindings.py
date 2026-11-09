@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+from pathlib import Path, PureWindowsPath
 import struct
 import sys
 import wave
@@ -521,7 +522,10 @@ def test_recording_dataset_remove_vacuum_and_detached_arrow_readers(recorded_dat
     pinned = dataset.search("1")
     model.version = "2"
     dataset.ingest(source, model=model)
-    assert dataset.remove(source)
+    removal_source = (
+        Path("\\\\?\\" + str(source.resolve())) if sys.platform == "win32" else source
+    )
+    assert dataset.remove(removal_source)
     assert not dataset.remove(source)
     assert source.is_file()
     with pytest.raises(lakeprism.RecordingError) as busy:
@@ -709,6 +713,50 @@ def test_speech_adapter_reports_only_fixed_failure_categories(monkeypatch, tmp_p
         _speech_adapter.main()
     assert failed.value.code == 1
     assert json.loads(output.read_text()) == {"error": expected}
+
+
+@pytest.mark.parametrize("path,uri", [
+    ("C:\\staged [#] % \u00e9.wav", "file:///C:/staged%20%5B%23%5D%20%25%20%C3%A9.wav"),
+    (r"\\?\C:\staged [#] %.wav", "file:///C:/staged%20%5B%23%5D%20%25.wav"),
+    (r"\\server\share\staged %.wav", "file://server/share/staged%20%25.wav"),
+    (r"\\?\UNC\server\share\staged %.wav", "file://server/share/staged%20%25.wav"),
+])
+def test_canonical_windows_file_uris(path, uri):
+    from lakeprism._paths import file_uri
+
+    assert file_uri(PureWindowsPath(path)) == uri
+
+
+def test_speech_adapter_reads_canonical_staged_paths(monkeypatch, tmp_path):
+    if os.environ.get("LAKEPRISM_NATIVE_MEDIA") != "1":
+        pytest.skip("requires native FFmpeg")
+    from types import SimpleNamespace
+    from lakeprism import _speech_adapter
+
+    source = tmp_path / "staged [#] % \u00e9.wav"
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\x00\x10" * 1600)
+    canonical = str(source.resolve())
+    if sys.platform == "win32":
+        canonical = "\\\\?\\" + canonical
+
+    def samples(data, dtype):
+        assert len(data) == 1600 * 4
+        return SimpleNamespace(size=1600)
+
+    segment = SimpleNamespace(start=0.0, end=0.1, text="fixture speech")
+    model = SimpleNamespace(transcribe=lambda *args, **kwargs: ([segment], None))
+    monkeypatch.setitem(sys.modules, "numpy", SimpleNamespace(
+        frombuffer=samples, any=lambda audio: True,
+    ))
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(
+        WhisperModel=lambda *args, **kwargs: model,
+    ))
+    result = _speech_adapter.transcribe(canonical, tmp_path / "model.bin")
+    assert result["segments"][0]["text"] == "fixture speech"
 
 
 @pytest.mark.parametrize("audio_end", [8000, None])

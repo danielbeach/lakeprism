@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 
+from ._paths import file_uri
+
 
 CHUNK_MILLIS = 30_000
 MAX_DURATION_MILLIS = 2 * 60 * 60 * 1_000
@@ -30,7 +32,7 @@ def transcribe(input_path, model_artifact):
         raise SpeechFailure("dependency_missing") from error
 
     session = MediaSession()
-    uri = Path(input_path).resolve().as_uri()
+    uri = file_uri(Path(input_path).resolve())
     try:
         duration, _, audio_streams = session.media_metadata(uri)
         if not audio_streams:

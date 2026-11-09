@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ._lakeprism import _RecordingDataset, RecordingError
+from ._paths import file_uri
 
 
 _RECORDINGS = {".wav", ".mp4", ".mov", ".m4a", ".mkv", ".webm"}
@@ -81,7 +82,7 @@ class RecordingDataset:
         """
         uri = (
             source if isinstance(source, str) and source.startswith("file://")
-            else Path(source).expanduser().resolve().as_uri()
+            else file_uri(Path(source).expanduser().resolve())
         )
         return self._native.remove(uri)
 
