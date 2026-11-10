@@ -5,7 +5,7 @@ media, documents, Parquet, and derived features through SQL and Apache Arrow.
 It is designed for notebooks and small governed services where execution,
 credentials, and data locality must remain explicit.
 
-**Status: alpha.** Version [`0.1.0a2`](https://pypi.org/project/lakeprism/0.1.0a2/)
+**Status: 1.0 release candidate.** Version [`1.0.0rc1`](https://pypi.org/project/lakeprism/1.0.0rc1/)
 is published on PyPI with seven platform wheels and a source distribution.
 See [Release readiness](#release-readiness) for validated capabilities and limits.
 
@@ -13,17 +13,18 @@ See [Release readiness](#release-readiness) for validated capabilities and limit
 [local recording-to-SQL workflow](examples/local_transcription/README.md),
 including persistent transcripts, unchanged reuse, and explicit model preparation.
 
-**Preparing `1.0.0rc1`:** explicit recovery/removal/vacuum, reader-safe retention,
+**New in `1.0.0rc1`:** explicit recovery/removal/vacuum, reader-safe retention,
 batched refresh, stable transcript Arrow types, alpha-format reopening, and
-digital-silence protection are implemented in source, not published `0.1.0a2`.
+digital-silence protection are published and passed the hosted release gates.
+Stable 1.0 still requires feedback on users' own recording collections.
 See the [local recording contract](docs/LOCAL_RECORDINGS_CONTRACT.md).
 
 ## Install
 
-Install the explicit alpha version:
+Install the explicit release candidate:
 
 ```bash
-python -m pip install lakeprism==0.1.0a2
+python -m pip install lakeprism==1.0.0rc1
 ```
 
 Or build and install a wheel from a checkout:
@@ -36,23 +37,23 @@ python -m pip install dist/python/lakeprism-*.whl
 ```
 
 The wheel uses the CPython `abi3-py39` ABI and supports Python 3.9 or newer.
-For notebook helpers, install `lakeprism[notebook]==0.1.0a2`.
+For notebook helpers, install `lakeprism[notebook]==1.0.0rc1`.
 Those helpers load PyArrow, pandas, IPython, and tqdm only when called.
 
 The published `0.1.0a1` wheel includes local SQL, Arrow, catalog, Delta, Unity,
-and Flight bindings, but no native FFmpeg runtime. The `0.1.0a2` release
+and Flight bindings, but no native FFmpeg runtime. Releases `0.1.0a2` and `1.0.0rc1`
 bundles decode-only FFmpeg shared libraries, LGPL notices, build details, and
-complete corresponding source. Neither version bundles speech/embedding models,
+complete corresponding source. These packages do not bundle speech/embedding models,
 cloud credentials, or a cloud credential broker.
 
 ## Local recordings to a searchable dataset
 
-The published `0.1.0a2` release provides an installed-package workflow, not
+The published `1.0.0rc1` release provides an installed-package workflow, not
 just a repository script. Use Python 3.12 and install its `speech` extra;
 these APIs are not in `0.1.0a1`:
 
 ```bash
-python -m pip install "lakeprism[speech]==0.1.0a2"
+python -m pip install "lakeprism[speech]==1.0.0rc1"
 ```
 
 ```python
@@ -99,7 +100,7 @@ implemented. Use an application-owned local dataset directory, not a shared
 or remote filesystem. See the [runnable real-model example](examples/local_transcription/README.md)
 and [1.0 acceptance contract](docs/ACCEPTANCE_MATRIX.md#local-product-10-acceptance).
 
-### Dataset maintenance (unreleased candidate)
+### Dataset maintenance (`1.0.0rc1`)
 
 Keep original recordings outside the dataset directory. Removal never deletes
 the input; vacuum requires all dataset sessions, plans and Arrow readers to
@@ -217,8 +218,8 @@ run in Rust; Python provides notebook-friendly construction and consumption.
 
 ### Documents, media, and retrieval
 
-**Unreleased:** audio-stream metadata, corrected audio timeline handling, and
-the 64 MiB audio request budget below are not included in PyPI `0.1.0a2`.
+**Available in `1.0.0rc1`:** audio-stream metadata, corrected audio timeline
+handling, and the 64 MiB audio request budget below. These are not in `0.1.0a2`.
 
 | API | Functionality | Availability |
 | --- | --- | --- |
@@ -259,7 +260,7 @@ for row in sections.collect():
     print(row["text"])
 ```
 
-Published `0.1.0a1` wheels lack native decoding; `0.1.0a2` wheels include it.
+Published `0.1.0a1` wheels lack native decoding; `0.1.0a2` and `1.0.0rc1` wheels include it.
 To build locally, use a matching Rust/C toolchain (NASM on x86)
 and libclang; the builder compiles and bundles its own pinned FFmpeg:
 
@@ -378,7 +379,12 @@ object storage, custom media/model providers, or worker execution.
 
 ## Release readiness
 
-The current release is the explicit prerelease **`0.1.0a2`**. The PyPI workflow
+The current release is the explicit prerelease **`1.0.0rc1`**. Its
+[successful publication run](https://github.com/danielbeach/lakeprism/actions/runs/42722620622)
+passed all seven wheel targets and TestPyPI installation matrices, five-platform
+real-model acceptance, natural-speech quality gates, and production artifact
+hash/installation checks. Stable 1.0 still requires real-collection feedback.
+The PyPI workflow
 builds seven native-target wheel variants: manylinux x86_64/arm64, musllinux
 x86_64/arm64 (Alpine), macOS Intel/Apple Silicon, and Windows x86_64.
 The ABI policy targets ordinary GIL-enabled CPython 3.9+; free-threaded Python,
@@ -411,7 +417,9 @@ Publishing requires all of these gates in the same workflow run:
 5. Publication of those identical files to production PyPI, followed by
    production hash and installation checks.
 
-The workflow also runs the real model example before publication.
+The workflow also runs the real model example on five non-Alpine platforms
+with Python 3.12 before publication. Linux x86_64 additionally gates natural
+speech quality, controlled noise, silence and unchanged refresh.
 Alpine tests cover native video/audio decoding without installing PyArrow, whose
 musllinux distribution is outside this release's control. PyArrow-dependent
 notebook extras on Alpine are not a validated capability.
@@ -421,14 +429,17 @@ Each package index needs its own trusted publisher for owner `danielbeach`,
 repository `lakeprism`, workflow `pypi.yml`, and the matching environment name.
 No long-lived PyPI API token is needed.
 
+First bump Rust and Python package versions to an unused release identity.
 Use the Actions **PyPI** workflow with `publish=false` for build-only
 validation. Set `publish=true` on `main` to perform the full staged release,
-or push a tag matching the package version, such as `v0.1.0a2`. Publishing is
-an external, immutable release action; do not reuse a version for new bytes.
+or push a tag matching the new package version, such as `v1.0.0rc2`.
+Do not tag an already manually published version to trigger another build.
+Publishing is an external, immutable release action; do not reuse a version
+for new bytes.
 
 Live Databricks/Unity data-plane acceptance remains an opt-in requirement
 before claiming validated production cloud support. It is not a prerequisite
-for this explicitly local-first alpha.
+for this explicitly local-first release candidate.
 
 Release FFmpeg builds disable GPL/nonfree/version3 components, networking,
 autodetected dependencies, encoders, and unused formats. They support MP4/MOV,

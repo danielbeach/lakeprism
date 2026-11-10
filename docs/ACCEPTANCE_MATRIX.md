@@ -37,7 +37,7 @@ an isolated Python environment. CI and release Rust jobs also run optional
 S3/Delta/Iceberg REST/Unity tests and bounded subprocess-provider fixtures
 rather than checking only default features.
 The published `0.1.0a1` matrix tested portable bindings without native decode.
-Release `0.1.0a2` passed real native video/audio tests on every installed
+Release `1.0.0rc1` passed real native video/audio tests on every installed
 wheel, with its FFmpeg build prefix hidden. Python fixtures do not invoke a
 system FFmpeg executable. Alpine exercises native decoding without PyArrow.
 An additional CPU workflow runs a pinned real speech model on an openly
@@ -103,13 +103,13 @@ unchanged reuse, content/model/operator/parameter invalidation, and reopening
 for SQL without a model. Recovery is per recording, not per inference window.
 Search is case-insensitive substring matching, not semantic retrieval.
 
-**Unreleased media hardening:** current source preserves audio-stream offsets
+**Published RC1 media hardening:** `1.0.0rc1` preserves audio-stream offsets
 and gaps, accepts audio ending before its video container, limits requested PCM
 to 64 MiB per decode call, and reports fixed redacted speech failure categories.
 Installed-package tests cover these contracts; native WebM tests compare sample
 counts against FFmpeg. These changes are not in published `0.1.0a2`.
 
-**Unreleased lifecycle hardening:** an owned batch writer validates one manifest
+**Published RC1 lifecycle hardening:** an owned batch writer validates one manifest
 per folder refresh. Explicit recovery uses only a validated prior commit;
 removal/vacuum preserve reader leases and one recovery generation. Fault tests
 inject storage-full errors and abrupt child death at nine publication
@@ -139,6 +139,12 @@ Before calling this 1.0, require:
 5. Feedback from users processing their own recording collections, followed
    by a beta/API freeze and a release candidate with no known blocking defects.
 
+The automated publication, quality, compatibility and lifecycle gates passed
+for published `1.0.0rc1` in
+[run 42722620622](https://github.com/danielbeach/lakeprism/actions/runs/42722620622),
+from source `191a937110a30b2d70a2622ec43ab1624bfec580`.
+Actual user-collection feedback remains outstanding; stable 1.0 is not released.
+
 The model runtime uses one inference thread; the SQL runtime can use more.
 The adapter bounds each file to 1 GiB, two hours and 8,192 segments, with a
 two-hour timeout. It requires a known duration and does not overlap inference
@@ -158,36 +164,36 @@ zero silence segments, and a natural-speech timeline longer than 120 seconds.
 The first run failed silence acceptance; a digital-zero guard fixed that
 defect without loosening the gate.
 
-Apple Silicon / Python 3.12 development-wheel results:
+Linux x86_64 / Python 3.12.3 RC1 artifact results from the publication run:
 
 | Measurement | Observed |
 | --- | --- |
 | Clean / noisy word error rate | 10.01% / 16.85% |
 | Silence transcript segments | 0 |
-| Evaluated audio / cold wall time | 1,043.57 s / 28.86 s |
-| Cold real-time factor | 0.0277 |
-| Unchanged refresh | 0.100 s |
-| Maximum parent / child RSS | 332.2 / 553.9 MiB |
+| Evaluated audio / cold wall time | 1,043.57 s / 45.829 s |
+| Cold real-time factor | 0.0439 |
+| Unchanged refresh | 0.075 s |
+| Maximum parent / child RSS | 374.5 / 451.0 MiB |
 
 RSS values are independent process maxima, not simultaneous aggregate memory.
 The sample is limited read-English narration, not conversational/accent
-coverage or an accuracy guarantee. These are development-host observations,
-not published-release or cross-platform promises.
+coverage or an accuracy guarantee. These are observations on one hosted
+release-test machine, not cross-platform performance promises.
 
 `benchmark_refresh.py` separately measures **synthetic adapter and metadata
 overhead**, never ASR throughput. For 256 files, cold fixture publication took
-13.868 s; unchanged folder refresh took 0.041 s versus 8.513 s for 256 separate
+6.6565 s; unchanged folder refresh took 0.0377 s versus 6.4927 s for 256 separate
 one-file calls. Both warm paths verified zero extra provider calls.
 
 Hosted candidate gates repeat natural-speech acceptance and refresh measurement
 on Linux x86_64. The real-model sample, long-window workflow and Parquet
 reopening run on five native non-Alpine platforms with Python 3.12.
-Successful hosted artifacts remain a release prerequisite.
+Those hosted gates passed for `1.0.0rc1`; every new release must repeat them.
 
 ### Release gates outside local validation
 
-Release `0.1.0a2` passed these hosted gates and is published on PyPI.
-[Publication evidence](https://github.com/danielbeach/lakeprism/actions/runs/42093023166)
+Release `1.0.0rc1` passed these hosted gates and is published on PyPI.
+[Publication evidence](https://github.com/danielbeach/lakeprism/actions/runs/42722620622)
 covers all seven wheel platforms, the source distribution, TestPyPI rehearsal,
 and production artifact hash and installation checks.
 
@@ -205,10 +211,11 @@ every platform. Production receives exactly those same files and is checked
 again after upload. The `testpypi` and `pypi` GitHub environments restrict
 deployment to `main` and matching `v*` tags; each index has a separate OIDC
 trusted publisher. Release `0.1.0a2` adds bundled native FFmpeg and the persistent
-recording workflow to this matrix; every new version must repeat these gates. Wheel checks require
-all five shared libraries, the exact corresponding source archive, LGPL
+recording workflow to this matrix; `1.0.0rc1` adds the lifecycle, quality and
+five-platform speech gates above. Every new version must repeat these gates.
+Wheel checks require all five shared libraries, the exact corresponding source archive, LGPL
 notices, and a configuration disabling GPL/nonfree/version3 components.
 
 Protected non-production cloud/data-plane acceptance is still required before
 advertising validated production cloud support, but does not gate the
-explicitly local-first alpha package.
+explicitly local-first release candidate.

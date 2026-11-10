@@ -10,14 +10,14 @@ This example runs a real speech model, not a fixture provider:
 
 ## Install
 
-Use Python 3.12 and the published **0.1.0a2** release from PyPI.
+Use Python 3.12 and the published **1.0.0rc1** release candidate from PyPI.
 The older 0.1.0a1 wheels do not contain native decoding.
 
 To run this example from a checkout:
 
 ```bash
 uv venv --python 3.12 .demo-venv
-uv pip install --python .demo-venv/bin/python "lakeprism[speech]==0.1.0a2"
+uv pip install --python .demo-venv/bin/python "lakeprism[speech]==1.0.0rc1"
 
 # The only network/model preparation step; about 76 MB of weights.
 .demo-venv/bin/python examples/local_transcription/demo.py --prepare
@@ -44,7 +44,7 @@ mode enabled. No paid API, credentials, GPU, or automatic model download is used
 Install the published wheel with its `speech` extra:
 
 ```bash
-python -m pip install "lakeprism[speech]==0.1.0a2"
+python -m pip install "lakeprism[speech]==1.0.0rc1"
 ```
 
 ```python
@@ -113,7 +113,7 @@ The release example also checks repeated licensed speech longer than 60 seconds:
 ```
 
 This proves cross-window execution and timestamps, not long-recording speech
-quality. The candidate adds a separate pinned natural-speech quality gate:
+quality. Release `1.0.0rc1` adds a separate pinned natural-speech quality gate:
 
 ```bash
 .demo-venv/bin/python examples/local_transcription/evaluate.py --prepare
@@ -121,7 +121,7 @@ quality. The candidate adds a separate pinned natural-speech quality gate:
 .demo-venv/bin/python examples/local_transcription/benchmark_refresh.py
 ```
 
-Use an installed candidate wheel, not published `0.1.0a2`, for these gates.
+Use the installed `1.0.0rc1` wheel, not the older `0.1.0a2`, for these gates.
 Preparation downloads a 9.2 MB, checksummed LibriSpeech subset and writes CC BY
 4.0 attribution beside it. Evaluation reconstructs 73 distinct read-speech
 excerpts into three long chapters, then checks clean/noisy word error rates,
@@ -144,7 +144,7 @@ performance promise.
 Old and unpublished orphan Parquet files are intentionally retained to protect
 lazy readers. Automatic garbage collection and shared/network filesystem use
 are not supported. Use an application-owned local dataset directory.
-The unreleased candidate adds explicit reader-safe `remove`, `vacuum` and
+Published `1.0.0rc1` adds explicit reader-safe `remove`, `vacuum` and
 `recover` operations; see the [candidate contract](../../docs/LOCAL_RECORDINGS_CONTRACT.md).
 
 Only model inference is configured for one CPU thread. LakePrism's SQL runtime

@@ -16,8 +16,10 @@ exercise Python 3.9, 3.12 and 3.14 on all seven platforms.
 The optional `speech` extra has a narrower release gate: **CPython 3.12** on
 Linux glibc x86_64/ARM64, macOS Intel/Apple Silicon and Windows x86_64.
 Alpine/musl speech dependencies, other Python versions, GPU inference,
-diarization and non-English accuracy are not supported claims. These are
-candidate targets, not substitutes for a successful hosted release run.
+diarization and non-English accuracy are not supported claims. The supported
+targets passed the
+[RC1 hosted publication run](https://github.com/danielbeach/lakeprism/actions/runs/42722620622).
+Stable 1.0 still requires actual user-collection feedback.
 
 Windows speech also requires the
 [Microsoft x64 Visual C++ runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist),
